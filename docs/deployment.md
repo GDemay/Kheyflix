@@ -11,9 +11,20 @@ Both Railway environments have isolated service variables and deployments.
 They currently use the same authorized AllDebrid/Prowlarr accounts, but values
 are stored separately so either environment can be rotated independently.
 
-Each environment also runs the repository's private `prowlarr` service on port
-9696 with a persistent `/config` volume. Kheyflix reaches it only through
-`http://prowlarr.railway.internal:9696`; Prowlarr does not need a public domain.
+Each environment also runs an isolated Prowlarr service on port 9696 with a
+persistent `/config` volume. Staging uses `prowlarr` and production uses
+`prowlarr-production`; Kheyflix reaches them through Railway's private network
+at `http://<service>.railway.internal:9696`. Prowlarr does not need a public
+domain. Deploy its checked-in image explicitly when its container definition
+changes:
+
+```sh
+railway up prowlarr --path-as-root --service prowlarr --environment staging --detach
+railway up prowlarr --path-as-root --service prowlarr-production --environment production --detach
+```
+
+Both services require a persistent volume mounted at `/config` plus
+`PROWLARR_API_KEY`, `PORT=9696`, `PUID=0`, `PGID=0`, and the desired `TZ`.
 
 ## Local secrets
 
@@ -44,14 +55,19 @@ a duplicated `RAILWAY_TOKEN` GitHub secret.
 
 1. Run `npm ci`, `npm test`, `npm run lint`, and `npm run build`.
 2. Deploy the candidate checkout with `npm run deploy:staging`.
-3. Wait for Railway to report `SUCCESS` and run `npm run verify:staging`.
-4. Exercise catalog, discovery, detail, and playback flows in the staging UI.
-5. Merge the reviewed pull request into canonical `main`.
-6. Wait for the automatic production deployment and run
+3. If `prowlarr/` changed, deploy the staging Prowlarr service with the command
+   above.
+4. Wait for Railway to report `SUCCESS` and run `npm run verify:staging`.
+5. Exercise catalog, discovery, detail, and playback flows in the staging UI.
+6. Merge the reviewed pull request into canonical `main`.
+7. If `prowlarr/` changed, deploy the production Prowlarr service.
+8. Wait for the automatic production deployment and run
    `npm run verify:production`.
 
-The deployment commands load the ignored `.env.local` when it exists. A linked
-Railway owner session is also supported.
+The deployment commands use the linked Railway CLI owner session. For CI, set
+an environment-scoped `RAILWAY_TOKEN` in the runner process; the scripts do not
+load `.env.local`, preventing a production-scoped token from accidentally being
+used for staging.
 
 ## Secret synchronization
 
