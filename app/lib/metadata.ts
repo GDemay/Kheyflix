@@ -1,5 +1,5 @@
 export type EnrichedMetadata = {
-  provider: "tmdb" | "tvmaze";
+  provider: "tmdb" | "tvmaze" | "wikipedia";
   providerUrl: string;
   canonicalTitle: string;
   year?: number;
@@ -17,6 +17,7 @@ type Entry = { value: EnrichedMetadata | null; updatedAt: number };
 const shared = globalThis as typeof globalThis & {
   __kheyflixMetadata?: Map<string, Entry>;
   __kheyflixMetadataRequests?: Map<string, Promise<EnrichedMetadata | null>>;
+  __kheyflixPublicMetadataQueue?: Promise<void>;
 };
 const cache = (shared.__kheyflixMetadata ??= new Map());
 const requests = (shared.__kheyflixMetadataRequests ??= new Map());
@@ -53,6 +54,19 @@ async function fetchJson<T>(url: string, headers?: HeadersInit): Promise<T> {
     if (!response.ok)
       throw new Error(`Metadata provider returned ${response.status}`);
     return (await response.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchText(url: string, headers?: HeadersInit): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    if (!response.ok)
+      throw new Error(`Metadata provider returned ${response.status}`);
+    return await response.text();
   } finally {
     clearTimeout(timer);
   }
@@ -206,6 +220,115 @@ async function fromTvmaze(
   };
 }
 
+async function fromTmdbWebsite(
+  title: string,
+  kind: "movie" | "series",
+  year?: number,
+): Promise<EnrichedMetadata | null> {
+  const media = kind === "series" ? "tv" : "movie";
+  const query = year ? `${title} y:${year}` : title;
+  const html = await fetchText(
+    `https://www.themoviedb.org/search?query=${encodeURIComponent(query)}`,
+    { "Accept-Language": "en-US,en;q=0.9" },
+  );
+  const result = html.match(
+    new RegExp(
+      `href="(\/${media}\/[^\"]+)"[\\s\\S]{0,700}?src="https:\/\/(?:media|image)\\.themoviedb\\.org\/t\/p\/[^\"]+\/([^\"/?]+\\.(?:jpg|png))"`,
+      "i",
+    ),
+  );
+  if (!result) return null;
+  const poster = `https://image.tmdb.org/t/p/w780/${result[2]}`;
+  return {
+    provider: "tmdb",
+    providerUrl: `https://www.themoviedb.org${result[1]}`,
+    canonicalTitle: title,
+    year,
+    poster,
+    backdrop: poster,
+    genres: [],
+  };
+}
+
+async function queuedTmdbWebsite(
+  title: string,
+  kind: "movie" | "series",
+  year?: number,
+) {
+  const previous = shared.__kheyflixPublicMetadataQueue || Promise.resolve();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  shared.__kheyflixPublicMetadataQueue = previous.catch(() => {}).then(() => gate);
+  await previous.catch(() => {});
+  try {
+    return await fromTmdbWebsite(title, kind, year);
+  } finally {
+    setTimeout(release, 175);
+  }
+}
+
+async function fromWikipedia(
+  title: string,
+  kind: "movie" | "series",
+  year?: number,
+): Promise<EnrichedMetadata | null> {
+  type Page = {
+    pageid: number;
+    title: string;
+    extract?: string;
+    fullurl?: string;
+    thumbnail?: { source?: string };
+    original?: { source?: string };
+  };
+  const qualifier = kind === "series" ? "television series" : "film";
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    origin: "*",
+    generator: "search",
+    gsrnamespace: "0",
+    gsrlimit: "8",
+    gsrsearch: `intitle:"${title}" ${year || ""} ${qualifier}`,
+    prop: "pageimages|extracts|info",
+    piprop: "thumbnail|original",
+    pithumbsize: "1200",
+    exintro: "1",
+    explaintext: "1",
+    inprop: "url",
+    redirects: "1",
+  });
+  const result = await fetchJson<{ query?: { pages?: Record<string, Page> } }>(
+    `https://en.wikipedia.org/w/api.php?${params}`,
+    { "Api-User-Agent": "Kheyflix/1.0 (catalog artwork lookup)" },
+  );
+  const pages = Object.values(result.query?.pages || {})
+    .filter((page) => page.thumbnail?.source || page.original?.source)
+    .map((page) => ({
+      page,
+      value:
+        score(page.title.replace(/\s*\([^)]*\)\s*$/, ""), title) +
+        (page.extract?.includes(String(year)) ? 10 : 0),
+    }))
+    .sort((a, b) => b.value - a.value);
+  if (!pages[0] || pages[0].value < 72) return null;
+  const chosen = pages[0].page;
+  const artwork = chosen.thumbnail?.source || chosen.original?.source;
+  return {
+    provider: "wikipedia",
+    providerUrl:
+      chosen.fullurl ||
+      `https://en.wikipedia.org/?curid=${chosen.pageid}`,
+    canonicalTitle: title,
+    year,
+    overview: chosen.extract,
+    poster: artwork,
+    backdrop: artwork,
+    genres: [],
+  };
+}
+
 export async function getMetadata(
   title: string,
   kind: "movie" | "series",
@@ -222,9 +345,28 @@ export async function getMetadata(
       key,
       (async () => {
         try {
-          const tmdb = await fromTmdb(title, kind, year);
+          const attempt = async (
+            provider: () => Promise<EnrichedMetadata | null>,
+          ) => {
+            try {
+              return await provider();
+            } catch {
+              return null;
+            }
+          };
+          const tmdb = await attempt(() => fromTmdb(title, kind, year));
+          const secondary =
+            kind === "series"
+              ? await attempt(() => fromTvmaze(title, year))
+              : null;
+          const publicTmdb = await attempt(() =>
+            queuedTmdbWebsite(title, kind, year),
+          );
           const value =
-            tmdb || (kind === "series" ? await fromTvmaze(title, year) : null);
+            tmdb ||
+            secondary ||
+            publicTmdb ||
+            (await attempt(() => fromWikipedia(title, kind, year)));
           cache.set(key, { value, updatedAt: Date.now() });
           return value;
         } catch (error) {

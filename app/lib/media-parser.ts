@@ -90,6 +90,11 @@ const movieTitle = (value: string) => {
       .trim() || cleaned
   );
 };
+const isAuxiliaryVideo = (value: string) =>
+  /\b(?:trailer|sample|featurette|behind[ ._-]*the[ ._-]*scenes|roundtables?)\b/i.test(
+    value,
+  );
+const hasMeaningfulTitle = (value: string) => /[a-z]{2,}/i.test(value);
 
 export function groupDebridCatalog(
   magnets: DebridMagnetRecord[],
@@ -147,7 +152,11 @@ export function groupDebridCatalog(
       series.set(key, existing);
     } else {
       magnet.videoFiles.forEach((file) => {
-        const parsedTitle = movieTitle(file.name) || movieTitle(magnet.filename);
+        if (magnet.videoFiles.length > 1 && isAuxiliaryVideo(file.name)) return;
+        const fileTitle = movieTitle(file.name);
+        const parsedTitle = hasMeaningfulTitle(fileTitle)
+          ? fileTitle
+          : movieTitle(magnet.filename);
         const override = catalogOverride(`${file.name} ${magnet.filename}`, "movie");
         const title = override?.title || parsedTitle;
         const year = override?.year || yearFrom(file.name) || yearFrom(magnet.filename);
