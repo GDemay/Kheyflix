@@ -40,9 +40,20 @@ async function filesForMagnet(id:number) {
   return flattenFiles(magnet.files || []).filter(file=>isVideo(file.name)).sort((a,b)=>b.size-a.size);
 }
 
+async function filesForMagnets(ids:number[]) {
+  if (!ids.length) return new Map<number,DebridVideoFile[]>();
+  const data = await request<{magnets:Array<{id:string|number;files?:FileNode[];error?:{message:string}}>}>('/v4/magnet/files',{id:ids.map(String)});
+  return new Map((data.magnets || []).map(magnet => {
+    const videos = magnet.error ? [] : flattenFiles(magnet.files || []).filter(file=>isVideo(file.name)).sort((a,b)=>b.size-a.size).map(({name,size,path},index)=>({index,name,size,path}));
+    return [Number(magnet.id),videos] as const;
+  }));
+}
+
 export async function listMagnets():Promise<DebridMagnet[]> {
   const data = await request<{magnets:Array<Omit<DebridMagnet,'videoFiles'>>}>('/v4.1/magnet/status');
-  return Promise.all((data.magnets || []).map(async magnet => ({...magnet,videoFiles:magnet.statusCode===4 ? (await filesForMagnet(magnet.id)).map(({name,size,path},index)=>({index,name,size,path})) : []})));
+  const magnets=data.magnets || [];
+  const files=await filesForMagnets(magnets.filter(magnet=>magnet.statusCode===4).map(magnet=>magnet.id));
+  return magnets.map(magnet=>({...magnet,videoFiles:files.get(magnet.id) || []}));
 }
 
 export async function uploadMagnet(magnet:string) {
