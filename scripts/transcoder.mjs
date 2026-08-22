@@ -11,8 +11,12 @@ const ffmpeg = process.env.KHEYFLIX_FFMPEG_PATH || "ffmpeg",
   ffprobe = process.env.KHEYFLIX_FFPROBE_PATH || "ffprobe";
 const jobs = new Map(),
   probes = new Map(),
-  probeRequests = new Map();
+  probeRequests = new Map(),
+  subtitleJobs = new Set();
 const MAX_JOBS = 4,
+  MAX_PROBE_JOBS = 4,
+  MAX_PROBES = 128,
+  PROBE_TTL_MS = 30 * 60_000,
   TEXT_SUBTITLES = new Set([
     "subrip",
     "srt",
@@ -59,10 +63,18 @@ const runJson = (binary, args) =>
 async function probeMedia(id, file) {
   const key = `${id}:${file}`,
     cached = probes.get(key);
-  if (cached && Date.now() - cached.updatedAt < 30 * 60_000)
+  const now = Date.now();
+  for (const [probeKey, entry] of probes)
+    if (now - entry.updatedAt >= PROBE_TTL_MS) probes.delete(probeKey);
+  if (cached && now - cached.updatedAt < PROBE_TTL_MS) {
+    probes.delete(key);
+    probes.set(key, cached);
     return cached.value;
+  }
   const pending = probeRequests.get(key);
   if (pending) return pending;
+  if (probeRequests.size >= MAX_PROBE_JOBS)
+    throw new Error("The media probe service is busy. Try again shortly.");
   const request = runJson(ffprobe, [
     "-v",
     "error",
@@ -76,6 +88,7 @@ async function probeMedia(id, file) {
   try {
     const value = await request;
     probes.set(key, { value, updatedAt: Date.now() });
+    while (probes.size > MAX_PROBES) probes.delete(probes.keys().next().value);
     return value;
   } finally {
     probeRequests.delete(key);
@@ -126,7 +139,11 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
     if (url.pathname === "/health")
-      return json(response, 200, { ok: true, jobs: jobs.size });
+      return json(response, 200, {
+        ok: true,
+        jobs: jobs.size + subtitleJobs.size,
+        probes: probeRequests.size,
+      });
     const stop = url.pathname.match(/^\/stop\/([a-z0-9-]+)$/i);
     if (stop) {
       const child = jobs.get(stop[1]);
@@ -141,6 +158,10 @@ const server = http.createServer(async (request, response) => {
       /^\/subtitle\/(\d+)\/(\d+)\/(\d+)\.vtt$/,
     );
     if (subtitle) {
+      if (jobs.size + subtitleJobs.size >= MAX_JOBS)
+        return json(response, 429, {
+          error: "The playback service is busy. Try again shortly.",
+        });
       const subtitleStart = Math.max(
         0,
         Number(url.searchParams.get("start") || 0),
@@ -170,13 +191,17 @@ const server = http.createServer(async (request, response) => {
         ],
         { stdio: ["ignore", "pipe", "pipe"] },
       );
+      subtitleJobs.add(child);
       response.writeHead(200, {
         "Content-Type": "text/vtt; charset=utf-8",
         "Cache-Control": "private, max-age=86400",
       });
       child.stdout.pipe(response);
+      child.once("close", () => subtitleJobs.delete(child));
+      child.once("error", () => subtitleJobs.delete(child));
       response.on("close", () => {
         if (!child.killed) child.kill("SIGKILL");
+        subtitleJobs.delete(child);
       });
       return;
     }
@@ -185,7 +210,7 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(404).end();
       return;
     }
-    if (jobs.size >= MAX_JOBS)
+    if (jobs.size + subtitleJobs.size >= MAX_JOBS)
       return json(response, 429, {
         error: "The playback service is busy. Try again shortly.",
       });
@@ -282,5 +307,6 @@ server.listen(port, "127.0.0.1", () =>
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     for (const child of jobs.values()) if (!child.killed) child.kill("SIGKILL");
+    for (const child of subtitleJobs) if (!child.killed) child.kill("SIGKILL");
     server.close(() => process.exit(0));
   });

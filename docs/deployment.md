@@ -57,6 +57,14 @@ Required server-side values are `ALLDEBRID_API_KEY`, `PROWLARR_URL`, and
 commit them, put them in command output, or add them to a GitHub secret unless a
 GitHub Actions workflow specifically needs that credential.
 
+Native playback uses a control-plane/data-plane split: Kheyflix validates and
+unlocks the selected file, then returns a private, non-cacheable redirect so the
+browser streams bytes directly from AllDebrid. Railway's trusted `X-Real-IP`
+value is forwarded only to AllDebrid's unlock request so the generated URL is
+valid for that viewer. Set `KHEYFLIX_STREAM_MODE=relay` only as an emergency
+compatibility fallback; relay mode doubles service egress and holds one upstream
+connection per viewer. The AllDebrid API key always remains server-side.
+
 Railway's native GitHub integration deploys production, so it does not require
 a duplicated `RAILWAY_TOKEN` GitHub secret.
 

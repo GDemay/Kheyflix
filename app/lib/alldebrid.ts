@@ -15,10 +15,14 @@ const shared = globalThis as typeof globalThis & {
   __kheyflixMagnetCache?:CacheEntry<DebridMagnet[]>;
   __kheyflixMagnetRequest?:Promise<DebridMagnet[]>;
   __kheyflixStreamCache?:Map<string,CacheEntry<{url:string;name:string;size:number}>>;
+  __kheyflixStreamRequests?:Map<string,Promise<{url:string;name:string;size:number}>>;
 };
 const CATALOG_FRESH_MS=5*60_000;
 const CATALOG_STALE_MS=24*60*60_000;
 const STREAM_FRESH_MS=10*60_000;
+const STREAM_CACHE_MAX=128;
+const STREAM_REQUEST_MAX=64;
+const API_TIMEOUT_MS=15_000;
 
 const apiKey = () => {
   const key = process.env.ALLDEBRID_API_KEY;
@@ -29,7 +33,7 @@ const apiKey = () => {
 async function request<T>(path:string, fields:Record<string,string|string[]> = {}):Promise<T> {
   const body = new URLSearchParams();
   Object.entries(fields).forEach(([key,value]) => Array.isArray(value) ? value.forEach(item=>body.append(`${key}[]`,item)) : body.set(key,value));
-  const response = await fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store' });
+  const response = await fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store', signal:AbortSignal.timeout(API_TIMEOUT_MS) });
   const envelope = await response.json() as ApiEnvelope<T>;
   if (!response.ok || envelope.status !== 'success' || !envelope.data) throw new AllDebridError(envelope.error?.message || 'AllDebrid request failed.', envelope.error?.code, response.status || 502);
   return envelope.data;
@@ -87,18 +91,31 @@ export async function uploadMagnet(magnet:string) {
   return result;
 }
 
-export async function resolveVideo(id:number,index:number) {
+const pruneStreamCache = (now=Date.now()) => {
+  const cache=shared.__kheyflixStreamCache;
+  if(!cache)return;
+  for(const[key,entry]of cache)if(now-entry.updatedAt>=STREAM_FRESH_MS)cache.delete(key);
+  while(cache.size>STREAM_CACHE_MAX)cache.delete(cache.keys().next().value as string);
+};
+
+export async function resolveVideo(id:number,index:number,clientIp?:string) {
   if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(index) || index < 0) throw new AllDebridError('Invalid media selection.','INVALID_MEDIA',400);
-  const key=`${id}:${index}`;const cached=shared.__kheyflixStreamCache?.get(key);
-  if(cached&&Date.now()-cached.updatedAt<STREAM_FRESH_MS)return cached.value;
-  const videos = await filesForMagnet(id);
-  const selected = videos[index];
-  if (!selected) throw new AllDebridError('Video file not found.','VIDEO_NOT_FOUND',404);
-  const unlocked = await request<{link?:string;filename?:string;filesize?:number;delayed?:number}>('/v4/link/unlock',{link:selected.link});
-  if (!unlocked.link) throw new AllDebridError(unlocked.delayed ? 'The stream is still being prepared. Try again shortly.' : 'The stream could not be unlocked.','STREAM_PREPARING',409);
-  const value={url:unlocked.link,name:unlocked.filename||selected.name,size:unlocked.filesize||selected.size};
-  (shared.__kheyflixStreamCache??=new Map()).set(key,{value,updatedAt:Date.now()});
-  return value;
+  const key=`${id}:${index}:${clientIp||'server'}`,now=Date.now();pruneStreamCache(now);
+  const cache=shared.__kheyflixStreamCache??=new Map(),cached=cache.get(key);
+  if(cached&&now-cached.updatedAt<STREAM_FRESH_MS){cache.delete(key);cache.set(key,cached);return cached.value}
+  const requests=shared.__kheyflixStreamRequests??=new Map(),pending=requests.get(key);
+  if(pending)return pending;
+  if(requests.size>=STREAM_REQUEST_MAX)throw new AllDebridError('The playback resolver is busy. Try again shortly.','STREAM_RESOLVER_BUSY',429);
+  const resolve=(async()=>{
+    const videos = await filesForMagnet(id);
+    const selected = videos[index];
+    if (!selected) throw new AllDebridError('Video file not found.','VIDEO_NOT_FOUND',404);
+    const unlocked = await request<{link?:string;filename?:string;filesize?:number;delayed?:number}>('/v4/link/unlock',{link:selected.link,...(clientIp?{ip:clientIp}:{})});
+    if (!unlocked.link) throw new AllDebridError(unlocked.delayed ? 'The stream is still being prepared. Try again shortly.' : 'The stream could not be unlocked.','STREAM_PREPARING',409);
+    const value={url:unlocked.link,name:unlocked.filename||selected.name,size:unlocked.filesize||selected.size};
+    cache.set(key,{value,updatedAt:Date.now()});pruneStreamCache();return value;
+  })().finally(()=>requests.delete(key));
+  requests.set(key,resolve);return resolve;
 }
 
 export const contentTypeFor = (filename:string) => {
