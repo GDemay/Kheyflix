@@ -322,6 +322,10 @@ export default function StreamingPlayer({
         muted
         playsInline
         preload="auto"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.muted = false;
+          event.currentTarget.volume = volume;
+        }}
         onClick={toggle}
         onPlay={() => {
           setPlaying(true);

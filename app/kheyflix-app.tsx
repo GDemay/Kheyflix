@@ -25,6 +25,7 @@ import {
 import { catalog, getTitle, MediaTitle } from "./catalog";
 import ProfilePage from "./profile-page";
 import { DebridDetails, DebridExperience } from "./debrid-library";
+import DiscoveryPage from "./discovery-page";
 import { parseRoute, Route, routePath } from "./routing";
 import StreamingPlayer from "./streaming-player";
 
@@ -91,6 +92,7 @@ function Header({
             ["home", "Home"],
             ["series", "Series"],
             ["movies", "Movies"],
+            ["discover", "Discover"],
           ] as const
         ).map(([section, label]) => (
           <button
@@ -643,6 +645,7 @@ export default function KheyflixApp() {
           navigate={navigate}
         />
       )}
+      {route.section === "discover" && <DiscoveryPage navigate={navigate} />}
       {route.section === "profile" && <ProfilePage navigate={navigate} />}
       {route.section === "debrid" && (
         <>
