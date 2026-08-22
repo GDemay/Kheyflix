@@ -14,6 +14,7 @@ import {
   Tv,
 } from "lucide-react";
 import { DebridMagnetRecord, groupDebridCatalog } from "./lib/media-parser";
+import type { ReleaseMetadata } from "./lib/release-parser";
 import { Route } from "./routing";
 
 type Result = {
@@ -26,6 +27,7 @@ type Result = {
   publishedAt?: string;
   category: "movie" | "series" | "other";
   magnet: string;
+  metadata: ReleaseMetadata;
 };
 type Preparation = {
   magnetId: number;
@@ -49,6 +51,23 @@ export default function DiscoveryPage({
   const [error, setError] = useState("");
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [preparations, setPreparations] = useState<Record<string, Preparation>>({});
+  const [kindFilter, setKindFilter] = useState("all");
+  const [seasonFilter, setSeasonFilter] = useState("all");
+  const [qualityFilter, setQualityFilter] = useState("all");
+  const [subtitleFilter, setSubtitleFilter] = useState("all");
+
+  const filterOptions = useMemo(() => ({
+    seasons: [...new Set(results.map((result) => result.metadata.season).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
+    qualities: [...new Set(results.map((result) => result.metadata.resolution).filter((value): value is NonNullable<Result["metadata"]["resolution"]> => Boolean(value)))],
+    subtitles: [...new Set(results.flatMap((result) => result.metadata.subtitleLanguages))].sort(),
+  }), [results]);
+
+  const visibleResults = useMemo(() => results.filter((result) =>
+    (kindFilter === "all" || result.category === kindFilter) &&
+    (seasonFilter === "all" || result.metadata.season === Number(seasonFilter)) &&
+    (qualityFilter === "all" || result.metadata.resolution === qualityFilter) &&
+    (subtitleFilter === "all" || result.metadata.subtitleLanguages.includes(subtitleFilter)),
+  ), [results, kindFilter, seasonFilter, qualityFilter, subtitleFilter]);
 
   const activeIds = useMemo(
     () =>
@@ -70,6 +89,10 @@ export default function DiscoveryPage({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || "Search is unavailable.");
       setResults(data.results || []);
+      setKindFilter("all");
+      setSeasonFilter("all");
+      setQualityFilter("all");
+      setSubtitleFilter("all");
     } catch (reason) {
       setResults([]);
       setError(reason instanceof Error ? reason.message : "Search is unavailable.");
@@ -208,8 +231,20 @@ export default function DiscoveryPage({
       {!searching && !error && results.length === 0 && query && (
         <div className="discovery-message"><Search />Search to see available releases.</div>
       )}
+      {results.length > 0 && (
+        <div className="discovery-filters" aria-label="Result filters">
+          <div><span>Type</span><select aria-label="Filter by type" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All</option><option value="movie">Movies</option><option value="series">Series</option></select></div>
+          <div><span>Season</span><select aria-label="Filter by season" value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value)}><option value="all">Any season</option>{filterOptions.seasons.map((season) => <option value={season} key={season}>Season {season}</option>)}</select></div>
+          <div><span>Quality</span><select aria-label="Filter by quality" value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}><option value="all">Any quality</option>{filterOptions.qualities.map((quality) => <option value={quality} key={quality}>{quality}</option>)}</select></div>
+          <div><span>Subtitles</span><select aria-label="Filter by subtitles" value={subtitleFilter} onChange={(event) => setSubtitleFilter(event.target.value)}><option value="all">Any subtitles</option>{filterOptions.subtitles.map((language) => <option value={language} key={language}>{language}</option>)}</select></div>
+          <strong>{visibleResults.length} result{visibleResults.length === 1 ? "" : "s"}</strong>
+        </div>
+      )}
+      {results.length > 0 && visibleResults.length === 0 && (
+        <div className="discovery-message"><Search />No releases match these filters.</div>
+      )}
       <div className="discovery-results">
-        {results.map((result) => {
+        {visibleResults.map((result) => {
           const preparation = preparations[result.id];
           const ready = preparation?.phase === "ready";
           return (
@@ -219,8 +254,19 @@ export default function DiscoveryPage({
               </div>
               <div className="discovery-result-copy">
                 <small>{result.category === "series" ? "SERIES" : result.category === "movie" ? "MOVIE" : "VIDEO"} · {result.source}</small>
-                <h2>{result.title}</h2>
+                <h2>{result.metadata.displayTitle}{result.metadata.year ? ` (${result.metadata.year})` : ""}</h2>
+                <div className="release-tags">
+                  {result.metadata.season && <b>Season {result.metadata.season}</b>}
+                  {result.metadata.episode && <b>Episode {result.metadata.episode}{result.metadata.episodeEnd ? `–${result.metadata.episodeEnd}` : ""}</b>}
+                  {result.metadata.seasonPack && <b>Complete season</b>}
+                  {result.metadata.resolution && <span>{result.metadata.resolution}</span>}
+                  {result.metadata.sourceType && <span>{result.metadata.sourceType}</span>}
+                  {result.metadata.videoCodec && <span>{result.metadata.videoCodec}</span>}
+                  {result.metadata.audioLanguages.map((language) => <span key={`audio-${language}`}>{language} audio</span>)}
+                  {result.metadata.subtitleLanguages.map((language) => <span className="subtitle-tag" key={`sub-${language}`}>{language} subtitles</span>)}
+                </div>
                 <p>{formatSize(result.size)} · {result.seeders} sources available</p>
+                <details className="release-details"><summary>Release details</summary>{result.title}</details>
                 {preparation && (
                   <div className="preparation-status" aria-live="polite">
                     <div><span>{preparation.status}</span><b>{preparation.progress}%</b></div>

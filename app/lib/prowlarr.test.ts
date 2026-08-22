@@ -39,6 +39,7 @@ describe("Prowlarr discovery", () => {
         seeders: 20,
         category: "movie",
         magnet,
+        metadata: expect.objectContaining({ displayTitle: "Ubuntu Desktop" }),
       }),
     ]);
     expect(fetchMock.mock.calls[0][0].searchParams.get("query")).toBe("Ubuntu");

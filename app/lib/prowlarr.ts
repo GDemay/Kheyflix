@@ -1,3 +1,5 @@
+import { parseReleaseTitle, ReleaseMetadata } from "./release-parser";
+
 const DEFAULT_LIMIT = 30;
 
 export class ProwlarrError extends Error {
@@ -32,6 +34,7 @@ export type DiscoveryResult = {
   publishedAt?: string;
   category: "movie" | "series" | "other";
   magnet: string;
+  metadata: ReleaseMetadata;
 };
 
 const configuration = () => {
@@ -125,6 +128,7 @@ export async function searchProwlarr(query: string): Promise<DiscoveryResult[]> 
           publishedAt: release.publishDate,
           category: categoryFor(release),
           magnet,
+          metadata: parseReleaseTitle(title),
         },
       ];
     })
