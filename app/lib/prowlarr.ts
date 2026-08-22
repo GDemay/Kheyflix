@@ -130,8 +130,7 @@ export async function searchProwlarr(query: string, options: DiscoverySearchOpti
       const title = release.title?.trim();
       if (!magnet || !title) return [];
       const metadata = parseReleaseTitle(title);
-      const category = categoryFor(release);
-      if (options.kind && category !== options.kind) return [];
+      const category = options.kind || categoryFor(release);
       if (season && metadata.season !== season) return [];
       if (episode && (metadata.episode === undefined || episode < metadata.episode || episode > (metadata.episodeEnd || metadata.episode))) return [];
       const id = stableId(magnet);
