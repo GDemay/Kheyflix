@@ -1,0 +1,22 @@
+{
+  "name": "kheyflix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kheyflix — agent-only monorepo. Autonomous delivery control plane drives DeepSeek Harness (Ox Alpha) to implement manager-labeled GitHub issues.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "test": "node --test \"control-plane/test/*.test.js\"",
+    "guard:secrets": "node control-plane/scripts/guard-secrets.mjs",
+    "kheyflix": "node control-plane/bin/kheyflix.js",
+    "dry-run": "node control-plane/bin/kheyflix.js dry-run",
+    "preflight": "node control-plane/bin/kheyflix.js preflight"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GDemay/Kheyflix.git"
+  },
+  "license": "UNLICENSED"
+}

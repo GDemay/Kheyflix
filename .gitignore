@@ -1,0 +1,6 @@
+# Control-plane runtime state (SQLite DB, locks, worktrees, transcripts).
+# Transcripts are redacted before write, but stay local regardless.
+.kheyflix/
+node_modules/
+*.log
+.DS_Store
