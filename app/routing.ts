@@ -1,0 +1,18 @@
+export type Route = { section: 'home'|'movies'|'series'|'search'|'title'|'watch'; id?: string; query?: string };
+
+export const parseRoute = (location = '/'): Route => {
+  const url = new URL(location, 'https://kheyflix.local');
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'watch') return { section:'watch', id:parts[1] };
+  if (parts[0] === 'title') return { section:'title', id:parts[1] };
+  if (parts[0] === 'search') return { section:'search', query:url.searchParams.get('q') ?? '' };
+  if (parts[0] === 'movies' || parts[0] === 'series') return { section:parts[0] };
+  return { section:'home' };
+};
+
+export const routePath = (route:Route) => {
+  if (route.section === 'home') return '/';
+  if (route.section === 'search') return `/search${route.query ? `?q=${encodeURIComponent(route.query)}` : ''}`;
+  if (route.section === 'title' || route.section === 'watch') return `/${route.section}/${route.id}`;
+  return `/${route.section}`;
+};
