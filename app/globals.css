@@ -26,3 +26,4 @@
 .debrid-hero .featured-description{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;max-width:570px}
 @media(max-width:420px){.catalog-grid{grid-template-columns:1fr}.catalog-grid .media-card{min-height:170px}.featured-copy h1{font-size:3.4rem}.featured-description{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation-duration:.001ms!important}}
+.catalog-trailer{position:absolute;z-index:2;inset:0;width:100%;height:100%;border:0;pointer-events:none;background:#000;transform:scale(1.01)}
