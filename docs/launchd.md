@@ -16,7 +16,8 @@ local process that starts, advances the lifecycle, parks, and exits.
 
 ```sh
 # /usr/local/etc/kheyflix.env — chmod 600, owner: manager
-KHEYFLIX_GITHUB_TOKEN=github_pat_xxx
+# KHEYFLIX_GITHUB_TOKEN is injected into this file by the manager's secret
+# mechanism; its value is never committed anywhere.
 KHEYFLIX_REPO=GDemay/Kheyflix
 KHEYFLIX_REPO_PATH=/Users/manager/Kheyflix
 ```

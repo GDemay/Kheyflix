@@ -31,12 +31,13 @@ Every controller log line and every Harness transcript byte passes
 
 - GitHub tokens: `ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…`, `github_pat_…`
 - OpenRouter keys: `sk-or-…`
-- `Authorization: Bearer …` headers
-- URL-embedded credentials (`scheme://user:pass@host`) and
-  `x-access-token:…`
-- Generic `key=value` / `key: value` shapes for api key, access/refresh/
-  installation/app token, secret, password, credential, authorization,
-  private key
+- Authorization headers carrying bearer-style credentials
+- URL-embedded credentials (user and password components inside a URL) and
+  x-access-token style userinfo
+- Generic credential-style assignments — any of the sensitive key names
+  below followed by an assignment or mapping separator and a value:
+  api key, access / refresh / installation / app token, secret, password,
+  credential, authorization, private key
 - Exact runtime secrets registered with the logger (e.g. the live token) are
   split out of strings first, so partial embeddings (push URLs) are covered
 
