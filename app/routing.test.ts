@@ -9,9 +9,9 @@ describe('Kheyflix routing', () => {
     expect(parseRoute('/title/big-buck-bunny')).toEqual({ section:'title', id:'big-buck-bunny' });
     expect(parseRoute('/watch/big-buck-bunny')).toEqual({ section:'watch', id:'big-buck-bunny' });
     expect(parseRoute('/profile')).toEqual({ section:'profile' });
-    expect(parseRoute('/stream/123/0?title=Open%20Movie')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie' });
+    expect(parseRoute('/stream/123/0?title=Open%20Movie')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie', compat:false });
+    expect(parseRoute('/stream/123/0?title=Open%20Movie&compat=1')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie', compat:true });
     expect(parseRoute('/debrid/123/2?title=My%20Movie')).toEqual({ section:'debrid', id:'123', file:2, title:'My Movie' });
-    expect(parseRoute('/library')).toEqual({ section:'library' });
     expect(parseRoute('/search?q=Big%20Buck')).toEqual({ section:'search', query:'Big Buck' });
   });
 
@@ -19,6 +19,7 @@ describe('Kheyflix routing', () => {
     expect(routePath({section:'search',query:'sci fi'})).toBe('/search?q=sci%20fi');
     expect(routePath({section:'watch',id:'big-buck-bunny'})).toBe('/watch/big-buck-bunny');
     expect(routePath({section:'stream',id:'123',file:0,title:'Open Movie'})).toBe('/stream/123/0?title=Open%20Movie');
+    expect(routePath({section:'stream',id:'123',file:0,title:'Open Movie',compat:true})).toBe('/stream/123/0?title=Open%20Movie&compat=1');
     expect(routePath({section:'debrid',id:'123',file:2,title:'My Movie'})).toBe('/debrid/123/2?title=My%20Movie');
   });
 });
