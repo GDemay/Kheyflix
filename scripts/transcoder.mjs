@@ -10,6 +10,7 @@ const port = Number(process.env.KHEYFLIX_TRANSCODER_PORT || 3101),
 const ffmpeg = process.env.KHEYFLIX_FFMPEG_PATH || "ffmpeg",
   ffprobe = process.env.KHEYFLIX_FFPROBE_PATH || "ffprobe";
 const jobs = new Map(),
+  jobTouched = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
   subtitleJobs = new Set();
@@ -149,6 +150,13 @@ const server = http.createServer(async (request, response) => {
       const child = jobs.get(stop[1]);
       if (child && !child.killed) child.kill("SIGKILL");
       jobs.delete(stop[1]);
+      jobTouched.delete(stop[1]);
+      response.writeHead(204).end();
+      return;
+    }
+    const touch = url.pathname.match(/^\/touch\/([a-z0-9-]+)$/i);
+    if (touch) {
+      if (jobs.has(touch[1])) jobTouched.set(touch[1], Date.now());
       response.writeHead(204).end();
       return;
     }
@@ -210,16 +218,21 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(404).end();
       return;
     }
-    if (jobs.size + subtitleJobs.size >= MAX_JOBS)
-      return json(response, 429, {
-        error: "The playback service is busy. Try again shortly.",
-      });
     const token = url.searchParams.get("token") || crypto.randomUUID(),
       existing = jobs.get(token);
     if (existing && !existing.killed) existing.kill("SIGKILL");
+    if (!existing && jobs.size + subtitleJobs.size >= MAX_JOBS)
+      return json(response, 429, {
+        error: "The playback service is busy. Try again shortly.",
+      });
     const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
       audio = selectedStreamIndex(url.searchParams.get("audio")),
       copyVideo = url.searchParams.get("video") === "copy",
+      quality = new Set(["480", "720", "1080", "original"]).has(
+        url.searchParams.get("quality"),
+      )
+        ? url.searchParams.get("quality")
+        : "original",
       media = await probeMedia(match[1], match[2]),
       videoCodec = media.video[0]?.codec || "",
       videoHeight = media.video[0]?.height || 0;
@@ -232,7 +245,7 @@ const server = http.createServer(async (request, response) => {
       "0:v:0",
       "-map",
       `0:${audio}?`,
-      ...videoOutputOptions(videoCodec, videoHeight, copyVideo),
+      ...videoOutputOptions(videoCodec, videoHeight, copyVideo, quality),
       "-c:a",
       "aac",
       "-b:a",
@@ -252,6 +265,10 @@ const server = http.createServer(async (request, response) => {
     );
     const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
     jobs.set(token, child);
+    jobTouched.set(token, Date.now());
+    const terminate = () => {
+      if (!child.killed) child.kill("SIGKILL");
+    };
     let started = false,
       stderr = "";
     const startup = setTimeout(() => {
@@ -265,6 +282,7 @@ const server = http.createServer(async (request, response) => {
           "Content-Type": "video/mp4",
           "Cache-Control": "private, no-store",
           "X-Kheyflix-Audio": "aac",
+          "X-Kheyflix-Quality": quality,
         });
       }
       if (!response.write(chunk)) child.stdout.pause();
@@ -282,14 +300,14 @@ const server = http.createServer(async (request, response) => {
     child.on("close", (code) => {
       clearTimeout(startup);
       jobs.delete(token);
+      jobTouched.delete(token);
       if (!started && !response.writableEnded)
         json(response, code === null ? 504 : 502, {
           error: stderr || "The compatible stream could not start.",
         });
     });
-    response.on("close", () => {
-      if (!response.writableEnded && !child.killed) child.kill("SIGKILL");
-    });
+    request.once("aborted", terminate);
+    response.once("close", terminate);
   } catch (error) {
     if (!response.headersSent)
       json(response, 502, {
@@ -302,8 +320,20 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, "127.0.0.1", () =>
   console.log(`Kheyflix media compatibility service: http://127.0.0.1:${port}`),
 );
+const leaseSweep = setInterval(() => {
+  const expiredBefore = Date.now() - 60_000;
+  for (const [token, touchedAt] of jobTouched) {
+    if (touchedAt >= expiredBefore) continue;
+    const child = jobs.get(token);
+    if (child && !child.killed) child.kill("SIGKILL");
+    jobs.delete(token);
+    jobTouched.delete(token);
+  }
+}, 15_000);
+leaseSweep.unref();
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
+    clearInterval(leaseSweep);
     for (const child of jobs.values()) if (!child.killed) child.kill("SIGKILL");
     for (const child of subtitleJobs) if (!child.killed) child.kill("SIGKILL");
     server.close(() => process.exit(0));

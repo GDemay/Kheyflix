@@ -23,7 +23,13 @@ import {
   serializeWatchProgress,
   updateWatchProgress,
 } from "./lib/watch-progress";
-import { needsCompatiblePlayback } from "./lib/playback";
+import {
+  availableQualities,
+  needsCompatiblePlayback,
+  nextAutoQuality,
+  QualityMode,
+  RenditionQuality,
+} from "./lib/playback";
 import { Route } from "./routing";
 
 type MediaInfo = {
@@ -106,7 +112,8 @@ export default function StreamingPlayer({
     video = useRef<HTMLVideoElement>(null),
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    lastSaved = useRef(0);
+    lastSaved = useRef(0),
+    lastQualitySwitch = useRef(0);
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
         return JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
@@ -130,6 +137,8 @@ export default function StreamingPlayer({
     [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
     [copyCompatibleVideo, setCopyCompatibleVideo] = useState(false),
+    [qualityMode, setQualityMode] = useState<QualityMode>("auto"),
+    [rendition, setRendition] = useState<RenditionQuality>("480"),
     [offset, setOffset] = useState(0),
     [session, setSession] = useState(() => crypto.randomUUID()),
     [audio, setAudio] = useState<number>(),
@@ -137,7 +146,7 @@ export default function StreamingPlayer({
     [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">(
       "medium",
     ),
-    [menu, setMenu] = useState<"audio" | "subtitles" | null>(null),
+    [menu, setMenu] = useState<"audio" | "subtitles" | "settings" | null>(null),
     [playing, setPlaying] = useState(false),
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
@@ -146,12 +155,14 @@ export default function StreamingPlayer({
     [loading, setLoading] = useState(true),
     [controls, setControls] = useState(true),
     [intro, setIntro] = useState(true);
-  const duration = info?.duration || nativeDuration,
-    absoluteTime = compatible ? offset + localTime : localTime,
+  const transcoded = compatible || rendition !== "original",
+    sourceHeight = info?.video[0]?.height || 0,
+    duration = info?.duration || nativeDuration,
+    absoluteTime = transcoded ? offset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
   const source = mediaReady
-    ? compatible
-      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}${audio !== undefined ? `&audio=${audio}` : ""}${copyCompatibleVideo ? "&video=copy" : ""}`
+    ? transcoded
+      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
   const playbackTitle = currentQueue?.seriesTitle
@@ -193,39 +204,41 @@ export default function StreamingPlayer({
     else element.pause();
   }, []);
   const restart = useCallback(
-    (at: number, nextAudio = audio) => {
+    (at: number, nextAudio = audio, nextQuality = rendition) => {
       const target = Math.max(0, Math.min(duration || at, at));
       persist(target);
       stop();
       setLocalTime(0);
       setOffset(target);
       setAudio(nextAudio);
+      setRendition(nextQuality);
+      lastQualitySwitch.current = Date.now();
       setSession(crypto.randomUUID());
     },
-    [audio, duration, persist, stop],
+    [audio, duration, persist, rendition, stop],
   );
   const seek = useCallback(
     (at: number) => {
       const target = Math.max(0, Math.min(duration || at, at));
       setScrub(undefined);
-      if (compatible) restart(target);
+      if (transcoded) restart(target);
       else if (video.current) {
         video.current.currentTime = target;
         setLocalTime(target);
         persist(target);
       }
     },
-    [compatible, duration, persist, restart],
+    [duration, persist, restart, transcoded],
   );
   const safeBack = useCallback(() => {
     persist();
-    if (compatible) stop();
+    if (transcoded) stop();
     onBack();
-  }, [compatible, onBack, persist, stop]);
+  }, [onBack, persist, stop, transcoded]);
   const playNext = useCallback(() => {
     if (!next) return;
     persist();
-    if (compatible) stop();
+    if (transcoded) stop();
     navigate({
       section: "stream",
       id: String(next.magnetId),
@@ -233,9 +246,19 @@ export default function StreamingPlayer({
       title: next.seriesId
         ? `${next.seriesTitle || "Series"} · S${String(next.season).padStart(2, "0")} E${String(next.episode).padStart(2, "0")} · ${next.label}`
         : next.label,
-      compat: compatible,
+      compat: transcoded,
     });
-  }, [compatible, navigate, next, persist, stop]);
+  }, [navigate, next, persist, stop, transcoded]);
+
+  const adaptQuality = useCallback(
+    (direction: "up" | "down") => {
+      if (qualityMode !== "auto" || Date.now() - lastQualitySwitch.current < 12_000)
+        return;
+      const nextQuality = nextAutoQuality(rendition, direction, sourceHeight);
+      if (nextQuality !== rendition) restart(absoluteTime, audio, nextQuality);
+    },
+    [absoluteTime, audio, qualityMode, rendition, restart, sourceHeight],
+  );
   useEffect(() => {
     const timer = setTimeout(() => setIntro(false), 1800);
     return () => clearTimeout(timer);
@@ -244,6 +267,21 @@ export default function StreamingPlayer({
     persistRef.current = persist;
     stopRef.current = stop;
   }, [persist, stop]);
+  useEffect(() => {
+    if (!transcoded) return;
+    const token = session,
+      touch = () =>
+        void fetch(`/api/debrid/transcode/${id}/${file}?session=${token}`, {
+          method: "PATCH",
+          keepalive: true,
+        }).catch(() => undefined);
+    touch();
+    const timer = setInterval(touch, 20_000);
+    return () => {
+      clearInterval(timer);
+      stop(token);
+    };
+  }, [file, id, session, stop, transcoded]);
   useEffect(() => {
     let active = true;
     void fetch(`/api/debrid/media/${id}/${file}`)
@@ -269,14 +307,7 @@ export default function StreamingPlayer({
             identity,
           ),
         );
-        if (saved > 0) {
-          if (
-            route.compat ||
-            needsCompatiblePlayback(value.format, selected?.codec)
-          )
-            setOffset(saved);
-          else if (video.current) video.current.currentTime = saved;
-        }
+        if (saved > 0) setOffset(saved);
         setMediaReady(true);
       })
       .catch(() => setMediaReady(true));
@@ -284,6 +315,11 @@ export default function StreamingPlayer({
       active = false;
     };
   }, [file, id, identity, route.compat]);
+  useEffect(() => {
+    if (qualityMode !== "auto" || !playing || loading) return;
+    const timer = setTimeout(() => adaptQuality("up"), 25_000);
+    return () => clearTimeout(timer);
+  }, [adaptQuality, loading, playing, qualityMode, rendition]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -334,6 +370,7 @@ export default function StreamingPlayer({
         playsInline
         preload="auto"
         onLoadedMetadata={(event) => {
+          if (!transcoded && offset > 0) event.currentTarget.currentTime = offset;
           event.currentTarget.muted = false;
           event.currentTarget.volume = volume;
           void event.currentTarget.play().catch(() => {
@@ -357,15 +394,18 @@ export default function StreamingPlayer({
           setLocalTime(value);
           if (Date.now() - lastSaved.current > 5000) {
             lastSaved.current = Date.now();
-            persist(compatible ? offset + value : value);
+            persist(transcoded ? offset + value : value);
           }
         }}
         onDurationChange={(event) => {
-          if (!info?.duration && !compatible)
+          if (!info?.duration && !transcoded)
             setNativeDuration(event.currentTarget.duration);
         }}
         onCanPlay={() => setLoading(false)}
-        onWaiting={() => setLoading(true)}
+        onWaiting={() => {
+          setLoading(true);
+          adaptQuality("down");
+        }}
         onPlaying={() => {
           setPlaying(true);
           setLoading(false);
@@ -375,9 +415,11 @@ export default function StreamingPlayer({
           setPlaying(false);
         }}
         onError={() => {
-          if (!compatible) {
+          if (!transcoded) {
             setCompatible(true);
             setSession(crypto.randomUUID());
+          } else if (qualityMode === "auto" && rendition === "480" && !compatible) {
+            restart(absoluteTime, audio, "original");
           }
         }}
       >
@@ -385,7 +427,7 @@ export default function StreamingPlayer({
           <track
             key={subtitle}
             kind="subtitles"
-            src={`/api/debrid/subtitle/${id}/${file}/${subtitle}?start=${compatible ? offset : 0}`}
+            src={`/api/debrid/subtitle/${id}/${file}/${subtitle}?start=${transcoded ? offset : 0}`}
             srcLang={
               info?.subtitles.find((track) => track.index === subtitle)
                 ?.language || "en"
@@ -414,7 +456,7 @@ export default function StreamingPlayer({
           <strong>{playbackTitle}</strong>
           <span>
             {info?.video[0]
-              ? `${info.video[0].height}p · ${info.video[0].codec.toUpperCase()}`
+              ? `${qualityMode === "auto" ? `Auto · ${rendition === "original" ? "Original" : `${rendition}p`}` : rendition === "original" ? "Original" : `${rendition}p`} · ${info.video[0].codec.toUpperCase()}`
               : "Kheyflix Streaming"}
           </span>
         </div>
@@ -536,7 +578,7 @@ export default function StreamingPlayer({
           ) : null}
           <IconButton
             label="Playback settings"
-            onClick={() => setMenu(menu ? null : "subtitles")}
+            onClick={() => setMenu(menu === "settings" ? null : "settings")}
           >
             <Settings />
           </IconButton>
@@ -551,7 +593,7 @@ export default function StreamingPlayer({
           <div
             className="track-menu"
             role="dialog"
-            aria-label={menu === "audio" ? "Audio languages" : "Subtitles"}
+            aria-label={menu === "audio" ? "Audio languages" : menu === "settings" ? "Playback settings" : "Subtitles"}
           >
             {menu === "audio" ? (
               <>
@@ -572,6 +614,46 @@ export default function StreamingPlayer({
                     </small>
                   </button>
                 ))}
+              </>
+            ) : menu === "settings" ? (
+              <>
+                <h3>Video quality</h3>
+                <p className="quality-hint">
+                  Auto starts light and raises quality while playback stays smooth.
+                </p>
+                {(["auto", ...availableQualities(sourceHeight)] as QualityMode[]).map(
+                  (value) => (
+                    <button
+                      className={qualityMode === value ? "active" : ""}
+                      key={value}
+                      onClick={() => {
+                        const nextQuality = value === "auto" ? "480" : value;
+                        setQualityMode(value);
+                        setMenu(null);
+                        restart(absoluteTime, audio, nextQuality);
+                      }}
+                    >
+                      <span>
+                        {value === "auto"
+                          ? "Auto"
+                          : value === "original"
+                            ? "Original"
+                            : `${value}p`}
+                      </span>
+                      <small>
+                        {value === "auto"
+                          ? `Now ${rendition === "original" ? "Original" : `${rendition}p`}`
+                          : value === "original"
+                            ? "Best source quality"
+                            : value === "480"
+                              ? "Data saver"
+                              : value === "720"
+                                ? "HD"
+                                : "Full HD"}
+                      </small>
+                    </button>
+                  ),
+                )}
               </>
             ) : (
               <>

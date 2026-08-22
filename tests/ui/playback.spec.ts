@@ -60,4 +60,17 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
 
   await expect(page.getByRole("button", { name: "Audio languages" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Subtitles" })).toBeVisible();
+  await page.getByRole("button", { name: "Playback settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Playback settings" });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole("button", { name: /Auto/ })).toHaveClass(
+    /active/,
+  );
+  await expect(
+    settings.getByRole("button", { name: "480p Data saver" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("button", { name: "Original Best source quality" }),
+  ).toBeVisible();
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 });
