@@ -52,4 +52,17 @@ describe("Prowlarr discovery", () => {
       code: "PROWLARR_INSECURE_URL",
     });
   });
+
+  it("allows HTTP over Railway private networking", async () => {
+    process.env.PROWLARR_URL = "http://prowlarr.railway.internal:9696";
+    process.env.PROWLARR_API_KEY = "key";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchProwlarr("Shrek")).resolves.toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toMatchObject({
+      hostname: "prowlarr.railway.internal",
+      port: "9696",
+    });
+  });
 });

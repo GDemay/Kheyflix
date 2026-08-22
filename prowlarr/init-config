@@ -1,0 +1,28 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+
+if [[ -z "${PROWLARR_API_KEY:-}" ]]; then
+  echo "PROWLARR_API_KEY is required" >&2
+  exit 1
+fi
+
+if [[ ! -f /config/config.xml ]]; then
+  umask 077
+  cat > /config/config.xml <<EOF
+<Config>
+  <BindAddress>*</BindAddress>
+  <Port>9696</Port>
+  <SslPort>6969</SslPort>
+  <EnableSsl>False</EnableSsl>
+  <LaunchBrowser>False</LaunchBrowser>
+  <ApiKey>${PROWLARR_API_KEY}</ApiKey>
+  <AuthenticationMethod>External</AuthenticationMethod>
+  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+  <Branch>master</Branch>
+  <LogLevel>info</LogLevel>
+  <UrlBase></UrlBase>
+  <InstanceName>Kheyflix Prowlarr</InstanceName>
+</Config>
+EOF
+fi
+
