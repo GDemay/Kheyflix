@@ -103,7 +103,6 @@ export async function searchProwlarr(query: string, options: DiscoverySearchOpti
   const episodeSuffix = season ? ` S${String(season).padStart(2, "0")}${episode ? `E${String(episode).padStart(2, "0")}` : ""}` : "";
   url.searchParams.set("query", `${term}${episodeSuffix}`);
   url.searchParams.set("type", "search");
-  if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
   url.searchParams.set("limit", String(DEFAULT_LIMIT));
   const response = await fetch(url, {
     headers: { "X-Api-Key": apiKey, Accept: "application/json" },

@@ -82,7 +82,7 @@ describe("Prowlarr discovery", () => {
     expect(results[0].metadata).toMatchObject({ season: 2, episode: 3, episodeEnd: 4 });
     const requestedUrl = fetchMock.mock.calls[0][0] as URL;
     expect(requestedUrl.searchParams.get("query")).toBe("Example Show S02E04");
-    expect(requestedUrl.searchParams.get("categories")).toBe("5000");
+    expect(requestedUrl.searchParams.has("categories")).toBe(false);
   });
 
   it("uses the requested kind when Prowlarr omits category metadata", async () => {
