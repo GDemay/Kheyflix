@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Info, Maximize, Menu, Pause, Play, RotateCcw, Search, Volume2, VolumeX, X } from 'lucide-react';
 import { catalog, getTitle, MediaTitle, rails, searchCatalog } from './catalog';
+import ProfilePage from './profile-page';
 import { parseRoute, Route, routePath } from './routing';
 
 const subscribeToNothing = () => () => undefined;
@@ -40,14 +41,14 @@ function Header({route,navigate}:{route:Route;navigate:(route:Route,replace?:boo
     <button className="brand" type="button" onClick={()=>navigate({section:'home'})} aria-label="Kheyflix home">KHEYFLIX</button>
     <button className="mobile-menu" type="button" aria-label="Toggle navigation" aria-expanded={menu} onClick={()=>setMenu(!menu)}><Menu/></button>
     <nav className={menu?'open':''} aria-label="Primary navigation">
-      {([['home','Home'],['series','Series'],['movies','Movies']] as const).map(([section,label])=><button key={section} type="button" className={route.section===section?'active':''} onClick={()=>{navigate({section});setMenu(false)}}>{label}</button>)}
+      {([['home','Home'],['series','Series'],['movies','Movies'],['profile','Profile']] as const).map(([section,label])=><button key={section} type="button" className={route.section===section?'active':''} onClick={()=>{navigate({section});setMenu(false)}}>{label}</button>)}
     </nav>
     <div className={`header-search ${searchOpen?'open':''}`}>
       <Search size={19}/><input aria-label="Search titles" placeholder="Titles, people, genres" value={query} onChange={(e)=>submit(e.target.value)} onFocus={()=>{if(route.section!=='search')navigate({section:'search',query},true)}}/>
       {query && <button type="button" aria-label="Clear search" onClick={()=>submit('')}><X size={17}/></button>}
     </div>
     {!searchOpen && <IconButton label="Open search" onClick={()=>navigate({section:'search',query:''})}><Search/></IconButton>}
-    <button className="profile" type="button" aria-label="Kheyflix profile"><span>K</span><ChevronDown size={14}/></button>
+    <button className="profile" type="button" aria-label="Open Kheyflix profile" onClick={()=>navigate({section:'profile'})}><span>K</span><ChevronDown size={14}/></button>
   </header>;
 }
 
@@ -112,14 +113,17 @@ export default function KheyflixApp() {
   const closeDetails=useCallback(()=>{if(window.history.length>1)window.history.back();else navigate(previousRoute.current,true)},[navigate]);
   const openTitle=(item:MediaTitle)=>navigate({section:'title',id:item.id});
   const item=route.id?getTitle(route.id):undefined;
+  const remoteItem:MediaTitle|undefined=route.section==='stream'&&route.id!==undefined&&route.file!==undefined?{id:`debrid-${route.id}-${route.file}`,title:route.title||'AllDebrid video',category:'movie',year:new Date().getFullYear(),rating:'Authorized',duration:'On demand',match:100,genres:['Personal library'],description:'Authorized media streamed securely through your AllDebrid account.',cast:[],director:'Personal library',tone:'space',playable:true,source:{url:`/api/debrid/stream/${route.id}/${route.file}`,type:'video/mp4',attribution:'Personal authorized media · streamed through AllDebrid',licenseUrl:'https://alldebrid.com'}}:undefined;
   const sectionItems=route.section==='movies'?catalog.filter(i=>i.category==='movie'):route.section==='series'?catalog.filter(i=>i.category==='series'):catalog;
   const results=searchCatalog(route.query??'');
   if(!hydrated)return <main className="app-shell" aria-label="Loading Kheyflix"/>;
   if(route.section==='watch'&&item)return <Player item={item} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'title',id:item.id},true)}}/>;
+  if(route.section==='stream'&&remoteItem)return <Player item={remoteItem} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'profile'},true)}}/>;
   return <main className="app-shell"><Header route={route} navigate={navigate}/>
     {route.section==='home'&&<><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/><div className="rails-container">{rails.map((rail,index)=><MediaRail key={rail.title} title={rail.title} items={rail.ids.map(id=>getTitle(id)).filter(Boolean) as MediaTitle[]} onOpen={openTitle} ranked={index===0}/>)}</div></>}
     {(route.section==='movies'||route.section==='series')&&<section className="catalog-page"><div className={`catalog-banner ${route.section}`}><p>KHEYFLIX COLLECTION</p><h1>{route.section==='movies'?'Movies':'Series'}</h1><span>{route.section==='movies'?'Cinematic stories for every kind of night.':'Bold worlds, unforgettable characters, one more episode.'}</span></div><div className="catalog-grid">{sectionItems.map(i=><Card key={i.id} item={i} onOpen={openTitle}/>)}</div></section>}
     {route.section==='search'&&<section className="search-page"><p className="search-kicker">SEARCH KHEYFLIX</p>{route.query?<><h1>Results for “{route.query}”</h1><p>{results.length} {results.length===1?'title':'titles'} found</p>{results.length?<div className="catalog-grid">{results.map(i=><Card key={i.id} item={i} onOpen={openTitle}/>)}</div>:<div className="empty-state"><Search/><h2>No titles found</h2><p>Try a title, actor, director, or genre like “Animation”.</p></div>}</>:<div className="search-prompt"><Search/><h1>What are you looking for?</h1><p>Search original films, series, people, and genres.</p><div className="suggestions">{['Animation','Sci-Fi','Drama','Nature'].map(q=><button key={q} onClick={()=>navigate({section:'search',query:q},true)}>{q}</button>)}</div></div>}</section>}
+    {route.section==='profile'&&<ProfilePage navigate={navigate}/>}
     {route.section==='title'&&item&&<><div className="background-page"><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/></div><Details item={item} onClose={closeDetails} onPlay={()=>navigate({section:'watch',id:item.id})}/></>}
     {route.section==='title'&&!item&&<section className="not-found"><h1>Title not found</h1><button onClick={()=>navigate({section:'home'})}>Return home</button></section>}
     <footer><button className="brand footer-brand" onClick={()=>navigate({section:'home'})}>KHEYFLIX</button><p>Original stories and legally streamed open films.</p><p>© 2026 Kheyflix · Proof of concept</p></footer>
