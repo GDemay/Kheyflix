@@ -8,13 +8,14 @@ and an FFmpeg compatibility service.
 Requirements: Node.js 22+, npm, FFmpeg, and FFprobe.
 
 ```sh
-cp .env.example .env
+cp /Users/gdemay/Documents/Projects/Kheyflix/.env.local .env.local
+chmod 600 .env.local
 npm ci
 npm run dev
 ```
 
-Set `ALLDEBRID_API_KEY` in `.env` to enable library and playback features.
-`TMDB_READ_ACCESS_TOKEN` is optional and enriches catalog metadata.
+The ignored `.env.local` enables the catalog, playback, discovery, and Railway
+CLI. `TMDB_READ_ACCESS_TOKEN` is optional and enriches movie metadata.
 
 ## Quality checks
 
@@ -30,12 +31,20 @@ The committed Railway and Nixpacks configuration installs FFmpeg, builds the
 application, starts the web and transcoder processes together, checks
 `/api/health`, and restarts failed deployments.
 
-1. Put a Railway project token in the ignored local `.env` as `RAILWAY_TOKEN`.
-2. Link the checkout with `railway link` if it is not already linked.
-3. Add `ALLDEBRID_API_KEY` and optionally `TMDB_READ_ACCESS_TOKEN` with
-   `railway variable set`.
-4. Deploy with `railway up --detach` and create a public domain with
-   `railway domain`.
+Kheyflix has isolated `staging` and `production` Railway environments. Deploy
+the current checkout to staging and run its API smoke test with:
 
-Never commit `.env` or real credential values. Rotate any credential that has
+```sh
+npm run deploy:staging
+npm run verify:staging
+```
+
+Production automatically deploys canonical GitHub `main`. The manual
+`npm run deploy:production` command is reserved for recovery. Run
+`npm run verify:production` after every production rollout.
+
+See [docs/deployment.md](docs/deployment.md) for environment URLs, secret
+management, promotion, rollback, and troubleshooting.
+
+Never commit `.env*` or real credential values. Rotate any credential that has
 been exposed outside its intended secret store.

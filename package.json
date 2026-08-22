@@ -10,7 +10,11 @@
     "build": "vinext build",
     "start": "node scripts/run-production.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "deploy:staging": "node scripts/deploy.mjs staging",
+    "deploy:production": "node scripts/deploy.mjs production",
+    "verify:staging": "node scripts/verify-deployment.mjs staging",
+    "verify:production": "node scripts/verify-deployment.mjs production"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
