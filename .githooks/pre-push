@@ -10,14 +10,9 @@ if ! printf '%s\n' "$remote_url" | grep -Eq "$canonical_pattern"; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "Kheyflix push blocked: GitHub CLI is required to verify the active account." >&2
-  exit 1
-fi
-
-active_account=$(gh api user --jq .login 2>/dev/null || true)
-if [ "$active_account" != "GDemay" ]; then
-  echo "Kheyflix push blocked: active GitHub account is '${active_account:-none}', expected 'GDemay'." >&2
+ssh_identity=$(ssh -i /Users/gdemay/.ssh/kheyflix_orchestrator -o IdentitiesOnly=yes -T git@github.com 2>&1 || true)
+if ! printf '%s\n' "$ssh_identity" | grep -Fq "Hi GDemay/Kheyflix!"; then
+  echo "Kheyflix push blocked: the repository deploy key did not authenticate for GDemay/Kheyflix." >&2
   exit 1
 fi
 
