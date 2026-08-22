@@ -18,6 +18,9 @@ export async function GET() {
       status: "ok",
       dependencies: {
         alldebrid: Boolean(process.env.ALLDEBRID_API_KEY),
+        discovery: Boolean(
+          process.env.PROWLARR_URL && process.env.PROWLARR_API_KEY,
+        ),
         metadata: Boolean(process.env.TMDB_READ_ACCESS_TOKEN),
         transcoder,
       },
@@ -25,4 +28,3 @@ export async function GET() {
     { headers: { "Cache-Control": "no-store" } },
   );
 }
-

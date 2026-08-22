@@ -56,8 +56,11 @@ const configuration = () => {
       503,
     );
   }
-  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost";
-  if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
+  const privateHttp =
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    url.hostname.endsWith(".railway.internal");
+  if (url.protocol !== "https:" && !(privateHttp && url.protocol === "http:"))
     throw new ProwlarrError(
       "Discovery requires HTTPS.",
       "PROWLARR_INSECURE_URL",
