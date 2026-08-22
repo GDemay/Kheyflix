@@ -26,6 +26,15 @@ railway up prowlarr --path-as-root --service prowlarr-production --environment p
 Both services require a persistent volume mounted at `/config` plus
 `PROWLARR_API_KEY`, `PORT=9696`, `PUID=0`, `PGID=0`, and the desired `TZ`.
 
+## Resource profile
+
+Every service instance is capped at Railway's minimum 0.5 vCPU and 500 MB of
+memory. The public Kheyflix service uses Railway Serverless in both environments
+and scales to zero when idle. Keep the private Prowlarr services always on:
+Railway does not wake a sleeping private-only service from internal traffic, so
+enabling Serverless there makes discovery fail after the idle timeout. This is
+the lowest stable profile that preserves catalog discovery after cold starts.
+
 ## Local secrets
 
 The authoritative local secret store is outside all worktrees:
