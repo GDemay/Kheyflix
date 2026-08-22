@@ -16,6 +16,9 @@ export async function GET() {
   return Response.json(
     {
       status: "ok",
+      deployment: {
+        commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      },
       dependencies: {
         alldebrid: Boolean(process.env.ALLDEBRID_API_KEY),
         discovery: Boolean(
