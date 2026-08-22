@@ -272,30 +272,34 @@ function Artwork({
   index?: number;
   kind?: "card" | "hero" | "detail";
 }) {
-  const source =
+  const remoteSource =
     kind === "card"
       ? metadata?.poster || metadata?.backdrop
       : metadata?.backdrop || metadata?.poster;
+  const accent = palette[index % palette.length];
+  const safeTitle = item.title
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  const fallbackSource = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-label="Generated artwork for ${safeTitle}"><defs><radialGradient id="g" cx="72%" cy="24%" r="85%"><stop stop-color="${accent}"/><stop offset="1" stop-color="#08090d"/></radialGradient></defs><rect width="1200" height="675" fill="url(#g)"/><circle cx="940" cy="150" r="260" fill="none" stroke="white" stroke-opacity=".12" stroke-width="3"/><circle cx="940" cy="150" r="165" fill="white" fill-opacity=".035"/><text x="64" y="82" fill="white" fill-opacity=".72" font-family="Arial,sans-serif" font-size="22" font-weight="700" letter-spacing="8">KHEYFLIX</text><text x="64" y="535" fill="white" font-family="Arial,sans-serif" font-size="54" font-weight="800">${safeTitle.slice(0, 34)}</text><text x="64" y="586" fill="white" fill-opacity=".65" font-family="Arial,sans-serif" font-size="22" letter-spacing="5">${item.category === "series" ? `${item.seasonCount} SEASONS · ${item.episodes.length} EPISODES` : `FILM${item.year ? ` · ${item.year}` : ""}`}</text></svg>`,
+  )}`;
+  const source = remoteSource || fallbackSource;
   const portraitBackdrop =
     kind !== "card" && !metadata?.backdrop && Boolean(metadata?.poster);
   return (
     <div
+      role="img"
+      aria-label={remoteSource ? `Artwork for ${item.title}` : `Generated artwork for ${item.title}`}
       className={`catalog-art catalog-art-${kind}${portraitBackdrop ? " portrait-backdrop" : ""}`}
       style={{
-        backgroundImage: source
-          ? `linear-gradient(0deg,rgba(0,0,0,.35),transparent 55%),url("${source}")`
-          : `radial-gradient(circle at 72% 24%,${palette[index % palette.length]},#08090d 72%)`,
+        backgroundImage: `linear-gradient(0deg,rgba(0,0,0,.35),transparent 55%),url("${source}")`,
         backgroundSize: portraitBackdrop ? "auto 94%" : undefined,
         backgroundRepeat: portraitBackdrop ? "no-repeat" : undefined,
         backgroundPosition: portraitBackdrop ? "72% center" : undefined,
       }}
     >
-      {!source && (
-        <span className="art-fallback">
-          <small>KHEYFLIX</small>
-          <strong>{item.title}</strong>
-        </span>
-      )}
     </div>
   );
 }

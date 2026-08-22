@@ -23,6 +23,9 @@ const cache = (shared.__kheyflixMetadata ??= new Map());
 const requests = (shared.__kheyflixMetadataRequests ??= new Map());
 const TTL = 30 * 24 * 60 * 60_000;
 const NEGATIVE_TTL = 24 * 60 * 60_000;
+const PUBLIC_LOOKUP_GAP = 650;
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 const normalize = (value: string) =>
   value
     .toLowerCase()
@@ -263,9 +266,16 @@ async function queuedTmdbWebsite(
   shared.__kheyflixPublicMetadataQueue = previous.catch(() => {}).then(() => gate);
   await previous.catch(() => {});
   try {
-    return await fromTmdbWebsite(title, kind, year);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const metadata = await fromTmdbWebsite(title, kind, year);
+        if (metadata) return metadata;
+      } catch {}
+      if (attempt < 2) await wait(PUBLIC_LOOKUP_GAP * (attempt + 1));
+    }
+    return null;
   } finally {
-    setTimeout(release, 175);
+    setTimeout(release, PUBLIC_LOOKUP_GAP);
   }
 }
 

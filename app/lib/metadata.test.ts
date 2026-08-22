@@ -30,6 +30,8 @@ describe("catalog metadata artwork", () => {
       vi
         .fn()
         .mockResolvedValueOnce(new Response("No TMDB result"))
+        .mockResolvedValueOnce(new Response("No TMDB result"))
+        .mockResolvedValueOnce(new Response("No TMDB result"))
         .mockResolvedValueOnce(wikipediaResponse),
     );
 
@@ -47,6 +49,8 @@ describe("catalog metadata artwork", () => {
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new Error("TVmaze unavailable"))
+      .mockResolvedValueOnce(new Response("No TMDB result"))
+      .mockResolvedValueOnce(new Response("No TMDB result"))
       .mockResolvedValueOnce(new Response("No TMDB result"))
       .mockResolvedValueOnce(
         new Response(
