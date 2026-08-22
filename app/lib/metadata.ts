@@ -17,6 +17,7 @@ type Entry = { value: EnrichedMetadata | null; updatedAt: number };
 const shared = globalThis as typeof globalThis & {
   __kheyflixMetadata?: Map<string, Entry>;
   __kheyflixMetadataRequests?: Map<string, Promise<EnrichedMetadata | null>>;
+  __kheyflixPublicMetadataQueue?: Promise<void>;
 };
 const cache = (shared.__kheyflixMetadata ??= new Map());
 const requests = (shared.__kheyflixMetadataRequests ??= new Map());
@@ -249,6 +250,25 @@ async function fromTmdbWebsite(
   };
 }
 
+async function queuedTmdbWebsite(
+  title: string,
+  kind: "movie" | "series",
+  year?: number,
+) {
+  const previous = shared.__kheyflixPublicMetadataQueue || Promise.resolve();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  shared.__kheyflixPublicMetadataQueue = previous.catch(() => {}).then(() => gate);
+  await previous.catch(() => {});
+  try {
+    return await fromTmdbWebsite(title, kind, year);
+  } finally {
+    setTimeout(release, 175);
+  }
+}
+
 async function fromWikipedia(
   title: string,
   kind: "movie" | "series",
@@ -340,7 +360,7 @@ export async function getMetadata(
               ? await attempt(() => fromTvmaze(title, year))
               : null;
           const publicTmdb = await attempt(() =>
-            fromTmdbWebsite(title, kind, year),
+            queuedTmdbWebsite(title, kind, year),
           );
           const value =
             tmdb ||

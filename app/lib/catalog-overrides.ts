@@ -10,6 +10,7 @@ type CatalogOverride = {
 // uploaders. Keep the human decisions here: parsing remains generic, while
 // known aliases always converge on the same title and metadata lookup.
 const SERIES_OVERRIDES: CatalogOverride[] = [
+  { match: /\bdirty[ ._-]+magazine\b.*\bvictor'?s[ ._-]+other[ ._-]+family\b|\bforbidden[ ._-]+girlfriend\b.*\bkicked[ ._-]+out\b/i, title: "Malcolm in the Middle", year: 2000 },
   { match: /\b(?:the[ ._-]+)?o[ ._-]*c\b|\boc[ ._-]+season\b/i, title: "The O.C.", year: 2003 },
   { match: /\bmalcolm[ ._-]+in[ ._-]+the[ ._-]+middle(?:[ ._-]+life'?s[ ._-]+still[ ._-]+unfair)?\b/i, title: "Malcolm in the Middle", year: 2000 },
   { match: /\bsouth[ ._-]+park\b/i, title: "South Park", year: 1997 },
@@ -45,11 +46,33 @@ const MOVIE_OVERRIDES: CatalogOverride[] = [
   { match: /\bshrek(?:[ ._-]+3|[ ._-]+the[ ._-]+third)(?:[ ._-]+animation)?[ ._-]+2007\b/i, title: "Shrek the Third", year: 2007 },
   { match: /\bshrek(?:[ ._-]+4|[ ._-]+forever[ ._-]+after)(?:[ ._-]+animation)?[ ._-]+2010\b/i, title: "Shrek Forever After", year: 2010 },
   { match: /\bone[ ._-]+battle[ ._-]+after[ ._-]+another\b|\b一战再战\b/i, title: "One Battle After Another", year: 2025 },
+  { match: /\bnow[ ._-]+you[ ._-]+see[ ._-]+me[ ._-]+now[ ._-]+you[ ._-]+don'?t\b/i, title: "Now You See Me: Now You Don't", year: 2025 },
+  { match: /\bbatman[ ._-]+begins\b/i, title: "Batman Begins", year: 2005 },
+  { match: /\bbatman[ ._-]+(?:the[ ._-]+)?dark[ ._-]+knight\b/i, title: "The Dark Knight", year: 2008 },
   { match: /\bpirates?(?:[ ._-]+des[ ._-]+caraibes)?[ ._-]+.*(?:curse[ ._-]+of[ ._-]+the[ ._-]+black[ ._-]+pearl|black[ ._-]+pearl)\b/i, title: "Pirates of the Caribbean: The Curse of the Black Pearl", year: 2003 },
+  { match: /\bpirates?[ ._-]+of[ ._-]+the[ ._-]+caribbean\b.*\bdead[ ._-]+man'?s[ ._-]+chest\b/i, title: "Pirates of the Caribbean: Dead Man's Chest", year: 2006 },
+  { match: /\bpirates?[ ._-]+of[ ._-]+the[ ._-]+caribbean\b.*\bat[ ._-]+world'?s[ ._-]+end\b/i, title: "Pirates of the Caribbean: At World's End", year: 2007 },
+  { match: /\bpirates?[ ._-]+of[ ._-]+the[ ._-]+caribbean\b.*\bon[ ._-]+stranger[ ._-]+tides\b/i, title: "Pirates of the Caribbean: On Stranger Tides", year: 2011 },
+  { match: /\bpirates?[ ._-]+of[ ._-]+the[ ._-]+caribbean\b.*\bdead[ ._-]+men[ ._-]+tell[ ._-]+no[ ._-]+tales\b/i, title: "Pirates of the Caribbean: Dead Men Tell No Tales", year: 2017 },
   { match: /\b(?:le[ ._-]+)?comte[ ._-]+de[ ._-]+monte[ ._-]+cristo\b/i, title: "The Count of Monte Cristo", year: 2024 },
   { match: /\b(?:le[ ._-]+)?loup[ ._-]+de[ ._-]+wall[ ._-]+street\b/i, title: "The Wolf of Wall Street", year: 2013 },
   { match: /\b(?:inside[ ._-]+out[ ._-]+2|vice[ ._-]+versa[ ._-]+2)\b/i, title: "Inside Out 2", year: 2024 },
   { match: /\b(?:la[ ._-]+reine[ ._-]+des[ ._-]+neiges|frozen)\b/i, title: "Frozen", year: 2013 },
+  { match: /\binterstellar\b/i, title: "Interstellar", year: 2014 },
+  { match: /\bthe[ ._-]+hunger[ ._-]+games[ ._-]+(?:1\b|2012\b)/i, title: "The Hunger Games", year: 2012 },
+  { match: /\bthe[ ._-]+hunger[ ._-]+games[ ._-]+2[ ._-]+catching[ ._-]+fire\b/i, title: "The Hunger Games: Catching Fire", year: 2013 },
+  { match: /\bthe[ ._-]+hunger[ ._-]+games[ ._-]+3[ ._-]+mockingjay[ ._-]+part[ ._-]+1\b/i, title: "The Hunger Games: Mockingjay – Part 1", year: 2014 },
+  { match: /\bthe[ ._-]+hunger[ ._-]+games[ ._-]+4[ ._-]+mockingjay[ ._-]+part[ ._-]+2\b/i, title: "The Hunger Games: Mockingjay – Part 2", year: 2015 },
+  { match: /\bsolo[ ._-]+a[ ._-]+star[ ._-]+wars[ ._-]+story\b/i, title: "Solo: A Star Wars Story", year: 2018 },
+  { match: /\b(?:monstres[ ._-]+et[ ._-]+cie|monsters?[ ._-]+inc)\b/i, title: "Monsters, Inc.", year: 2001 },
+  { match: /\bnausicaa[ ._-]+de[ ._-]+la[ ._-]+vallee[ ._-]+du[ ._-]+vent\b/i, title: "Nausicaä of the Valley of the Wind", year: 1984 },
+  { match: /\bmerlin[ ._-]+l[' ._-]*enchanteur\b/i, title: "The Sword in the Stone", year: 1963 },
+  { match: /\brobin[ ._-]+des[ ._-]+bois\b/i, title: "Robin Hood", year: 1973 },
+  { match: /\bpeau[ ._-]+d[ ._-]*ane\b/i, title: "Donkey Skin", year: 1970 },
+  { match: /\bun[ ._-]+conte[ ._-]+peut[ ._-]+en[ ._-]+cacher[ ._-]+un[ ._-]+autre\b/i, title: "Revolting Rhymes", year: 2016 },
+  { match: /\bmickey[ ._-]+il[ ._-]+etait[ ._-]+deux[ ._-]+fois[ ._-]+noel\b/i, title: "Mickey's Twice Upon a Christmas", year: 2004 },
+  { match: /\boscar[ ._-]+1967\b/i, title: "Oscar", year: 1967 },
+  { match: /\btante[ ._-]+hilda\b/i, title: "Aunt Hilda!", year: 2013 },
 ];
 
 export function catalogOverride(
