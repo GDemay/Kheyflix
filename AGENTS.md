@@ -8,3 +8,4 @@
 - All pull requests must target `GDemay/Kheyflix`, normally its `main` branch unless the user explicitly names another base branch.
 - If authentication cannot write to `GDemay/Kheyflix`, stop and report the authentication problem. Do not use a fork as a fallback.
 - Before handing off work, confirm that the commit is present on `GDemay/Kheyflix` and report the canonical PR or commit URL.
+- Do not bypass, disable, or replace the tracked `.githooks/pre-push` repository/account guard.

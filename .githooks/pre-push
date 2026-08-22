@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+remote_name=${1:-}
+remote_url=${2:-}
+canonical_pattern='github\.com[:/]GDemay/Kheyflix(?:\.git)?$'
+
+if ! printf '%s\n' "$remote_url" | grep -Eq "$canonical_pattern"; then
+  echo "Kheyflix push blocked: '$remote_name' is not GDemay/Kheyflix ($remote_url)." >&2
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Kheyflix push blocked: GitHub CLI is required to verify the active account." >&2
+  exit 1
+fi
+
+active_account=$(gh api user --jq .login 2>/dev/null || true)
+if [ "$active_account" != "GDemay" ]; then
+  echo "Kheyflix push blocked: active GitHub account is '${active_account:-none}', expected 'GDemay'." >&2
+  exit 1
+fi
+
+echo "Kheyflix push authorized: GDemay -> GDemay/Kheyflix." >&2
