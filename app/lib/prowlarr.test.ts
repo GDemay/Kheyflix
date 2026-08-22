@@ -66,4 +66,22 @@ describe("Prowlarr discovery", () => {
       port: "9696",
     });
   });
+
+  it("scopes series searches to a selected season and episode", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json([
+      { title: "Example.Show.S02E03-E04.1080p", magnetUrl: "magnet:?xt=urn:btih:ABC123", categories: [{ id: 5000, name: "TV" }] },
+      { title: "Example.Show.S01E03.1080p", magnetUrl: "magnet:?xt=urn:btih:DEF456", categories: [{ id: 5000, name: "TV" }] },
+      { title: "Example.Movie.2025.1080p", magnetUrl: "magnet:?xt=urn:btih:ABC789", categories: [{ id: 2000, name: "Movies" }] },
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await searchProwlarr("Example Show", { kind: "series", season: 2, episode: 4 });
+    expect(results).toHaveLength(1);
+    expect(results[0].metadata).toMatchObject({ season: 2, episode: 3, episodeEnd: 4 });
+    const requestedUrl = fetchMock.mock.calls[0][0] as URL;
+    expect(requestedUrl.searchParams.get("query")).toBe("Example Show S02E04");
+    expect(requestedUrl.searchParams.get("categories")).toBe("5000");
+  });
 });

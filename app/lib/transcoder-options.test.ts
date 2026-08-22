@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  audioSyncOptions,
   selectedStreamIndex,
   videoOutputOptions,
 } from "../../scripts/transcoder-options.mjs";
@@ -23,9 +24,9 @@ describe("compatible playback transcoder options", () => {
     );
   });
 
-  it("keeps regular HD compatibility transcodes at 720p", () => {
+  it("keeps 1080p compatibility transcodes fast enough for real-time playback", () => {
     expect(videoOutputOptions("hevc", 1080)).toEqual(
-      expect.arrayContaining(["-vf", "scale=-2:720"]),
+      expect.arrayContaining(["-vf", "scale=-2:480"]),
     );
   });
 
@@ -43,5 +44,21 @@ describe("compatible playback transcoder options", () => {
     expect(selectedStreamIndex("3.8")).toBe(3);
     expect(selectedStreamIndex(null)).toBe(1);
     expect(selectedStreamIndex("not-a-stream")).toBe(1);
+  });
+
+  it("moves audio later or earlier with bounded VLC-style corrections", () => {
+    expect(audioSyncOptions("0.5")).toEqual([
+      "-af",
+      "adelay=500:all=1",
+    ]);
+    expect(audioSyncOptions("-0.4")).toEqual([
+      "-af",
+      "atrim=start=0.4,asetpts=PTS-STARTPTS",
+    ]);
+    expect(audioSyncOptions("20")).toEqual([
+      "-af",
+      "adelay=5000:all=1",
+    ]);
+    expect(audioSyncOptions("invalid")).toEqual([]);
   });
 });

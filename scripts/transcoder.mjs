@@ -1,6 +1,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import {
+  audioSyncOptions,
   selectedStreamIndex,
   videoOutputOptions,
 } from "./transcoder-options.mjs";
@@ -219,6 +220,8 @@ const server = http.createServer(async (request, response) => {
     if (existing && !existing.killed) existing.kill("SIGKILL");
     const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
       audio = selectedStreamIndex(url.searchParams.get("audio")),
+      audioSync = url.searchParams.get("sync"),
+      subtitleStream = url.searchParams.get("subtitle"),
       copyVideo = url.searchParams.get("video") === "copy",
       media = await probeMedia(match[1], match[2]),
       videoCodec = media.video[0]?.codec || "",
@@ -232,6 +235,9 @@ const server = http.createServer(async (request, response) => {
       "0:v:0",
       "-map",
       `0:${audio}?`,
+      ...(subtitleStream && /^\d+$/.test(subtitleStream)
+        ? ["-map", `0:${subtitleStream}?`]
+        : []),
       ...videoOutputOptions(videoCodec, videoHeight, copyVideo),
       "-c:a",
       "aac",
@@ -239,7 +245,10 @@ const server = http.createServer(async (request, response) => {
       "192k",
       "-ac",
       "2",
-      "-sn",
+      ...audioSyncOptions(audioSync),
+      ...(subtitleStream && /^\d+$/.test(subtitleStream)
+        ? ["-c:s", "mov_text", "-disposition:s:0", "default"]
+        : ["-sn"]),
       "-movflags",
       "frag_keyframe+empty_moov+default_base_moof",
       "-frag_duration",
