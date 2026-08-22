@@ -167,6 +167,12 @@ const size = (bytes: number) =>
   palette = ["#58151d", "#172a50", "#51411a", "#183e37", "#49235a", "#57301b"];
 const displayTitle = (item: CatalogTitle, metadata?: EnrichedMetadata | null) =>
   metadata?.canonicalTitle || item.title;
+const shortOverview = (overview?: string) => {
+  if (!overview) return undefined;
+  const firstTwoSentences = overview.match(/^.*?[.!?](?:\s+.*?[.!?])?/)?.[0];
+  const summary = firstTwoSentences || overview;
+  return summary.length > 220 ? `${summary.slice(0, 217).trim()}…` : summary;
+};
 function saveQueue(item: CatalogTitle) {
   const queue: PlaybackQueueItem[] = item.episodes.map((episode) => ({
     titleId: item.id,
@@ -216,13 +222,18 @@ function Artwork({
     kind === "card"
       ? metadata?.poster || metadata?.backdrop
       : metadata?.backdrop || metadata?.poster;
+  const portraitBackdrop =
+    kind !== "card" && !metadata?.backdrop && Boolean(metadata?.poster);
   return (
     <div
-      className={`catalog-art catalog-art-${kind}`}
+      className={`catalog-art catalog-art-${kind}${portraitBackdrop ? " portrait-backdrop" : ""}`}
       style={{
         backgroundImage: source
           ? `linear-gradient(0deg,rgba(0,0,0,.35),transparent 55%),url("${source}")`
           : `radial-gradient(circle at 72% 24%,${palette[index % palette.length]},#08090d 72%)`,
+        backgroundSize: portraitBackdrop ? "auto 94%" : undefined,
+        backgroundRepeat: portraitBackdrop ? "no-repeat" : undefined,
+        backgroundPosition: portraitBackdrop ? "72% center" : undefined,
       }}
     >
       {!source && (
@@ -411,7 +422,7 @@ export function DebridExperience({
               </span>
             </p>
             <p className="featured-description">
-              {featuredMetadata?.overview ||
+              {shortOverview(featuredMetadata?.overview) ||
                 (featured.category === "series"
                   ? `${featured.episodes.length} episodes across ${featured.seasonCount} seasons, ready to stream now on Kheyflix.`
                   : "Available to stream now from your Kheyflix catalog.")}
