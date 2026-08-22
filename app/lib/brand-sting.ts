@@ -1,11 +1,8 @@
 export function playKheyflixSting() {
-  if (
-    typeof window === "undefined" ||
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  )
-    return;
+  if (typeof window === "undefined") return;
   try {
     const context = new window.AudioContext();
+    void context.resume();
     const compressor = context.createDynamicsCompressor();
     const master = context.createGain();
     compressor.threshold.value = -15;

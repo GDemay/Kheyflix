@@ -183,6 +183,8 @@ const server = http.createServer(async (request, response) => {
     const args = ["-hide_banner", "-loglevel", "error"];
     if (start) args.push("-ss", String(start));
     args.push(
+      "-copyts",
+      "-start_at_zero",
       "-readrate",
       "2",
       "-i",
@@ -200,10 +202,6 @@ const server = http.createServer(async (request, response) => {
       "-ac",
       "2",
       "-sn",
-      "-fflags",
-      "+genpts",
-      "-avoid_negative_ts",
-      "make_zero",
       "-movflags",
       "frag_keyframe+empty_moov+default_base_moof",
       "-frag_duration",
