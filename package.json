@@ -1,5 +1,5 @@
 {
-  "name": "sites-project",
+  "name": "kheyflix",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node scripts/run-dev.mjs",
     "build": "vinext build",
-    "start": "vinext start",
+    "start": "node scripts/run-production.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "vitest run --config vitest.config.ts"
   },
