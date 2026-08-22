@@ -423,7 +423,6 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
           void event.currentTarget.play().catch(() => {
             // Preserve audible playback as the default. If autoplay with sound
             // is blocked, leave the controls ready for a user-initiated play.
-            setLoading(false);
             setPlaying(false);
             setControls(true);
           });

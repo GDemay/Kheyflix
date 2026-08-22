@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  production-playback:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Wait for this commit on Railway production
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          for attempt in {1..60}; do
+            deployed=$(curl -fsS https://kheyflix-production.up.railway.app/api/health | node -e "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(value).deployment?.commit || '') } catch { console.log('') } })" || true)
+            if [ "$deployed" = "$EXPECTED_COMMIT" ]; then exit 0; fi
+            sleep 10
+          done
+          echo "Railway did not deploy $EXPECTED_COMMIT within 10 minutes" >&2
+          exit 1
+      - run: npm run verify:production
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:playback:production

@@ -1,0 +1,60 @@
+import { expect, test } from "@playwright/test";
+
+const playbackPath =
+  process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
+  "/stream/514397162/2/smiling-friends-s01-e04-episode-4";
+
+test("a real movie starts with sound and keeps streaming", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
+
+  const video = page.locator("video");
+  await expect(video).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect
+    .poll(() => video.evaluate((element) => element.readyState), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(3);
+  await expect(page.getByRole("status")).toBeHidden({ timeout: 30_000 });
+
+  const initial = await video.evaluate((element) => ({
+    muted: element.muted,
+    volume: element.volume,
+    paused: element.paused,
+    readyState: element.readyState,
+    width: element.videoWidth,
+    height: element.videoHeight,
+  }));
+  expect(initial.muted).toBe(false);
+  expect(initial.volume).toBe(1);
+  expect(initial.readyState).toBeGreaterThanOrEqual(3);
+  expect(initial.width).toBeGreaterThanOrEqual(640);
+  expect(initial.height).toBeGreaterThanOrEqual(360);
+
+  // Audible autoplay is forbidden by some mobile browsers. In that case the
+  // required user gesture must start playback unmuted on the first tap.
+  if (initial.paused) {
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+  }
+
+  const start = await video.evaluate((element) => element.currentTime);
+  await expect
+    .poll(
+      () => video.evaluate((element) => element.currentTime),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(start + 3);
+
+  const checkpoints: number[] = [];
+  for (let sample = 0; sample < 4; sample += 1) {
+    await page.waitForTimeout(5_000);
+    checkpoints.push(await video.evaluate((element) => element.currentTime));
+    await expect(page.getByRole("status")).toBeHidden();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  }
+  expect(checkpoints.at(-1)! - checkpoints[0]).toBeGreaterThan(12);
+
+  await expect(page.getByRole("button", { name: "Audio languages" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Subtitles" })).toBeVisible();
+});

@@ -19,8 +19,23 @@ describe("compatible playback transcoder options", () => {
 
   it("bounds expensive 4K compatibility transcodes to a streamable size", () => {
     expect(videoOutputOptions("hevc", 1600)).toEqual(
-      expect.arrayContaining(["-vf", "scale=-2:720", "-preset", "ultrafast"]),
+      expect.arrayContaining(["-vf", "scale=-2:480", "-preset", "ultrafast"]),
     );
+  });
+
+  it("keeps regular HD compatibility transcodes at 720p", () => {
+    expect(videoOutputOptions("hevc", 1080)).toEqual(
+      expect.arrayContaining(["-vf", "scale=-2:720"]),
+    );
+  });
+
+  it("preserves HEVC quality when the client advertises hardware support", () => {
+    expect(videoOutputOptions("hevc", 1600, true)).toEqual([
+      "-c:v",
+      "copy",
+      "-tag:v",
+      "hvc1",
+    ]);
   });
 
   it("preserves audio stream zero and safely defaults invalid selections", () => {

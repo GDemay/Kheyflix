@@ -194,23 +194,20 @@ const server = http.createServer(async (request, response) => {
     if (existing && !existing.killed) existing.kill("SIGKILL");
     const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
       audio = selectedStreamIndex(url.searchParams.get("audio")),
+      copyVideo = url.searchParams.get("video") === "copy",
       media = await probeMedia(match[1], match[2]),
       videoCodec = media.video[0]?.codec || "",
       videoHeight = media.video[0]?.height || 0;
     const args = ["-hide_banner", "-loglevel", "error"];
     if (start) args.push("-ss", String(start));
     args.push(
-      "-copyts",
-      "-start_at_zero",
-      "-readrate",
-      "2",
       "-i",
       inputFor(match[1], match[2]),
       "-map",
       "0:v:0",
       "-map",
       `0:${audio}?`,
-      ...videoOutputOptions(videoCodec, videoHeight),
+      ...videoOutputOptions(videoCodec, videoHeight, copyVideo),
       "-c:a",
       "aac",
       "-b:a",
