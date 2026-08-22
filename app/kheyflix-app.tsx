@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Info, Maximize, Menu, Pause, Play, RotateCcw, Search, Volume2, VolumeX, X } from 'lucide-react';
 import { catalog, getTitle, MediaTitle, rails, searchCatalog } from './catalog';
 import ProfilePage from './profile-page';
+import { DebridDetails, DebridLibrary } from './debrid-library';
 import { parseRoute, Route, routePath } from './routing';
 
 const subscribeToNothing = () => () => undefined;
@@ -41,7 +42,7 @@ function Header({route,navigate}:{route:Route;navigate:(route:Route,replace?:boo
     <button className="brand" type="button" onClick={()=>navigate({section:'home'})} aria-label="Kheyflix home">KHEYFLIX</button>
     <button className="mobile-menu" type="button" aria-label="Toggle navigation" aria-expanded={menu} onClick={()=>setMenu(!menu)}><Menu/></button>
     <nav className={menu?'open':''} aria-label="Primary navigation">
-      {([['home','Home'],['series','Series'],['movies','Movies'],['profile','Profile']] as const).map(([section,label])=><button key={section} type="button" className={route.section===section?'active':''} onClick={()=>{navigate({section});setMenu(false)}}>{label}</button>)}
+      {([['home','Home'],['series','Series'],['movies','Movies'],['library','My Library']] as const).map(([section,label])=><button key={section} type="button" className={route.section===section?'active':''} onClick={()=>{navigate({section});setMenu(false)}}>{label}</button>)}
     </nav>
     <div className={`header-search ${searchOpen?'open':''}`}>
       <Search size={19}/><input aria-label="Search titles" placeholder="Titles, people, genres" value={query} onChange={(e)=>submit(e.target.value)} onFocus={()=>{if(route.section!=='search')navigate({section:'search',query},true)}}/>
@@ -120,10 +121,12 @@ export default function KheyflixApp() {
   if(route.section==='watch'&&item)return <Player item={item} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'title',id:item.id},true)}}/>;
   if(route.section==='stream'&&remoteItem)return <Player item={remoteItem} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'profile'},true)}}/>;
   return <main className="app-shell"><Header route={route} navigate={navigate}/>
-    {route.section==='home'&&<><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/><div className="rails-container">{rails.map((rail,index)=><MediaRail key={rail.title} title={rail.title} items={rail.ids.map(id=>getTitle(id)).filter(Boolean) as MediaTitle[]} onOpen={openTitle} ranked={index===0}/>)}</div></>}
+    {route.section==='home'&&<><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/><div className="rails-container"><DebridLibrary navigate={navigate}/>{rails.map((rail,index)=><MediaRail key={rail.title} title={rail.title} items={rail.ids.map(id=>getTitle(id)).filter(Boolean) as MediaTitle[]} onOpen={openTitle} ranked={index===0}/>)}</div></>}
     {(route.section==='movies'||route.section==='series')&&<section className="catalog-page"><div className={`catalog-banner ${route.section}`}><p>KHEYFLIX COLLECTION</p><h1>{route.section==='movies'?'Movies':'Series'}</h1><span>{route.section==='movies'?'Cinematic stories for every kind of night.':'Bold worlds, unforgettable characters, one more episode.'}</span></div><div className="catalog-grid">{sectionItems.map(i=><Card key={i.id} item={i} onOpen={openTitle}/>)}</div></section>}
     {route.section==='search'&&<section className="search-page"><p className="search-kicker">SEARCH KHEYFLIX</p>{route.query?<><h1>Results for “{route.query}”</h1><p>{results.length} {results.length===1?'title':'titles'} found</p>{results.length?<div className="catalog-grid">{results.map(i=><Card key={i.id} item={i} onOpen={openTitle}/>)}</div>:<div className="empty-state"><Search/><h2>No titles found</h2><p>Try a title, actor, director, or genre like “Animation”.</p></div>}</>:<div className="search-prompt"><Search/><h1>What are you looking for?</h1><p>Search original films, series, people, and genres.</p><div className="suggestions">{['Animation','Sci-Fi','Drama','Nature'].map(q=><button key={q} onClick={()=>navigate({section:'search',query:q},true)}>{q}</button>)}</div></div>}</section>}
     {route.section==='profile'&&<ProfilePage navigate={navigate}/>}
+    {route.section==='library'&&<DebridLibrary navigate={navigate} mode="page"/>}
+    {route.section==='debrid'&&<><div className="background-page"><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/></div><DebridDetails route={route} navigate={navigate} onClose={closeDetails}/></>}
     {route.section==='title'&&item&&<><div className="background-page"><Hero item={catalog[0]} onInfo={()=>openTitle(catalog[0])} onPlay={()=>navigate({section:'watch',id:catalog[0].id})}/></div><Details item={item} onClose={closeDetails} onPlay={()=>navigate({section:'watch',id:item.id})}/></>}
     {route.section==='title'&&!item&&<section className="not-found"><h1>Title not found</h1><button onClick={()=>navigate({section:'home'})}>Return home</button></section>}
     <footer><button className="brand footer-brand" onClick={()=>navigate({section:'home'})}>KHEYFLIX</button><p>Original stories and legally streamed open films.</p><p>© 2026 Kheyflix · Proof of concept</p></footer>
