@@ -84,4 +84,24 @@ describe("Prowlarr discovery", () => {
     expect(requestedUrl.searchParams.get("query")).toBe("Example Show S02E04");
     expect(requestedUrl.searchParams.get("categories")).toBe("5000");
   });
+
+  it("uses the requested kind when Prowlarr omits category metadata", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json([
+          {
+            title: "Example.Movie.2025.1080p",
+            magnetUrl: "magnet:?xt=urn:btih:ABC789",
+          },
+        ]),
+      ),
+    );
+
+    const results = await searchProwlarr("Example Movie", { kind: "movie" });
+    expect(results).toHaveLength(1);
+    expect(results[0].category).toBe("movie");
+  });
 });
