@@ -21,14 +21,13 @@ import { parseWatchProgress, PlaybackQueueItem } from "./lib/watch-progress";
 import { Route } from "./routing";
 import { playKheyflixSting } from "./lib/brand-sting";
 
-const CATALOG_KEY = "kheyflix:catalog:v2",
+const CATALOG_KEY = "kheyflix:catalog:v3",
   METADATA_PREFIX = "kheyflix:metadata:",
   QUEUE_KEY = "kheyflix:playback-queue:v1";
 let catalogMemory: CatalogTitle[] | undefined,
   catalogRequest: Promise<CatalogTitle[]> | undefined;
 const metadataMemory = new Map<string, EnrichedMetadata | null>(),
-  metadataRequests = new Map<string, Promise<EnrichedMetadata | null>>(),
-  metadataStarted = new Set<string>();
+  metadataRequests = new Map<string, Promise<EnrichedMetadata | null>>();
 function cachedCatalog() {
   if (catalogMemory) return catalogMemory;
   if (typeof sessionStorage === "undefined") return [];
@@ -114,7 +113,6 @@ function readMetadata(key: string) {
 async function requestMetadata(item: CatalogTitle) {
   const key = metadataKey(item);
   if (metadataRequests.has(key)) return metadataRequests.get(key)!;
-  metadataStarted.add(key);
   const task = fetch(
     `/api/metadata?title=${encodeURIComponent(item.title)}&kind=${item.category}${item.year ? `&year=${item.year}` : ""}`,
   )
@@ -151,7 +149,7 @@ function useMetadata(item: CatalogTitle | undefined, eager = false) {
         active = false;
       };
     }
-    if (!eager && metadataStarted.size >= 8) return;
+    if (!eager) return;
     let active = true;
     void requestMetadata(item).then((value) => {
       if (active) setMetadata(value);
@@ -254,9 +252,27 @@ function CatalogCard({
   index: number;
   navigate: (route: Route) => void;
 }) {
-  const metadata = useMetadata(item, index < 8);
+  const card = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(index < 8);
+  useEffect(() => {
+    if (visible || !card.current || typeof IntersectionObserver === "undefined")
+      return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    observer.observe(card.current);
+    return () => observer.disconnect();
+  }, [visible]);
+  const metadata = useMetadata(item, visible);
   return (
     <button
+      ref={card}
       className="library-card"
       onClick={() =>
         navigate({
