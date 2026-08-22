@@ -11,6 +11,9 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
   const video = page.locator("video");
   await expect(video).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("Preparing compatible playback…")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Back 10 seconds" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Forward 10 seconds" })).toBeVisible();
   await expect
     .poll(() => video.evaluate((element) => element.readyState), {
       timeout: 30_000,

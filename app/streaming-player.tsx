@@ -8,6 +8,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  RotateCw,
   Settings,
   SkipForward,
   Volume2,
@@ -23,11 +24,6 @@ import {
   updateWatchProgress,
 } from "./lib/watch-progress";
 import { needsCompatiblePlayback } from "./lib/playback";
-import {
-  COMPATIBLE_STARTUP_TIMEOUT_MS,
-  NATIVE_STARTUP_TIMEOUT_MS,
-  startupRecovery,
-} from "./lib/playback-recovery";
 import { Route } from "./routing";
 
 type MediaInfo = {
@@ -110,8 +106,7 @@ export default function StreamingPlayer({
     video = useRef<HTMLVideoElement>(null),
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    lastSaved = useRef(0),
-    compatibleRetries = useRef(0);
+    lastSaved = useRef(0);
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
         return JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
@@ -132,6 +127,7 @@ export default function StreamingPlayer({
     ),
     next = nextInQueue(queue, identity);
   const [info, setInfo] = useState<MediaInfo>(),
+    [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
     [copyCompatibleVideo, setCopyCompatibleVideo] = useState(false),
     [offset, setOffset] = useState(0),
@@ -148,15 +144,16 @@ export default function StreamingPlayer({
     [nativeDuration, setNativeDuration] = useState(0),
     [volume, setVolume] = useState(1),
     [loading, setLoading] = useState(true),
-    [error, setError] = useState(false),
     [controls, setControls] = useState(true),
     [intro, setIntro] = useState(true);
   const duration = info?.duration || nativeDuration,
     absoluteTime = compatible ? offset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
-  const source = compatible
-    ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}${audio !== undefined ? `&audio=${audio}` : ""}${copyCompatibleVideo ? "&video=copy" : ""}`
-    : `/api/debrid/stream/${id}/${file}`;
+  const source = mediaReady
+    ? compatible
+      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}${audio !== undefined ? `&audio=${audio}` : ""}${copyCompatibleVideo ? "&video=copy" : ""}`
+      : `/api/debrid/stream/${id}/${file}`
+    : undefined;
   const playbackTitle = currentQueue?.seriesTitle
     ? `${currentQueue.seriesTitle} · S${String(currentQueue.season).padStart(2, "0")} E${String(currentQueue.episode).padStart(2, "0")} · ${currentQueue.label}`
     : route.title || currentQueue?.label || "Kheyflix video";
@@ -192,7 +189,7 @@ export default function StreamingPlayer({
   const toggle = useCallback(() => {
     const element = video.current;
     if (!element) return;
-    if (element.paused) void element.play().catch(() => setError(true));
+    if (element.paused) void element.play().catch(() => undefined);
     else element.pause();
   }, []);
   const restart = useCallback(
@@ -200,8 +197,6 @@ export default function StreamingPlayer({
       const target = Math.max(0, Math.min(duration || at, at));
       persist(target);
       stop();
-      setLoading(true);
-      setError(false);
       setLocalTime(0);
       setOffset(target);
       setAudio(nextAudio);
@@ -209,8 +204,6 @@ export default function StreamingPlayer({
     },
     [audio, duration, persist, stop],
   );
-  const restartRef = useRef(restart),
-    absoluteTimeRef = useRef(absoluteTime);
   const seek = useCallback(
     (at: number) => {
       const target = Math.max(0, Math.min(duration || at, at));
@@ -244,38 +237,9 @@ export default function StreamingPlayer({
     });
   }, [compatible, navigate, next, persist, stop]);
   useEffect(() => {
-    const timer = setTimeout(() => setIntro(false), 2400);
+    const timer = setTimeout(() => setIntro(false), 1800);
     return () => clearTimeout(timer);
   }, []);
-  useEffect(() => {
-    restartRef.current = restart;
-    absoluteTimeRef.current = absoluteTime;
-  }, [absoluteTime, restart]);
-  useEffect(() => {
-    if (!loading || error) return;
-    const timer = setTimeout(
-      () => {
-        const recovery = startupRecovery(
-          compatible,
-          compatibleRetries.current,
-        );
-        if (recovery === "fallback") {
-          setCompatible(true);
-          setSession(crypto.randomUUID());
-        } else if (recovery === "retry") {
-          compatibleRetries.current += 1;
-          restartRef.current(absoluteTimeRef.current);
-        } else {
-          setLoading(false);
-          setError(true);
-        }
-      },
-      compatible
-        ? COMPATIBLE_STARTUP_TIMEOUT_MS
-        : NATIVE_STARTUP_TIMEOUT_MS,
-    );
-    return () => clearTimeout(timer);
-  }, [compatible, error, loading, session]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
@@ -306,11 +270,16 @@ export default function StreamingPlayer({
           ),
         );
         if (saved > 0) {
-          if (route.compat) setOffset(saved);
+          if (
+            route.compat ||
+            needsCompatiblePlayback(value.format, selected?.codec)
+          )
+            setOffset(saved);
           else if (video.current) video.current.currentTime = saved;
         }
+        setMediaReady(true);
       })
-      .catch(() => undefined);
+      .catch(() => setMediaReady(true));
     return () => {
       active = false;
     };
@@ -395,13 +364,10 @@ export default function StreamingPlayer({
           if (!info?.duration && !compatible)
             setNativeDuration(event.currentTarget.duration);
         }}
-        onCanPlay={() => {
-          compatibleRetries.current = 0;
-          setLoading(false);
-        }}
+        onCanPlay={() => setLoading(false)}
         onWaiting={() => setLoading(true)}
         onPlaying={() => {
-          compatibleRetries.current = 0;
+          setPlaying(true);
           setLoading(false);
         }}
         onEnded={() => {
@@ -412,10 +378,7 @@ export default function StreamingPlayer({
           if (!compatible) {
             setCompatible(true);
             setSession(crypto.randomUUID());
-            return;
           }
-          setLoading(false);
-          setError(true);
         }}
       >
         {subtitle !== undefined && (
@@ -437,33 +400,10 @@ export default function StreamingPlayer({
           <strong>KHEYFLIX</strong>
         </div>
       )}
-      {loading && !error && (
+      {loading && (
         <div className="buffering" role="status">
           <span />
-          <p>Preparing {compatible ? "compatible " : ""}playback…</p>
-        </div>
-      )}
-      {error && (
-        <div className="playback-error" role="alert">
-          <h1>We couldn’t continue playback</h1>
-          <p>The source may still be preparing. Your place has been saved.</p>
-          <div>
-            <button
-              onClick={() => {
-                setError(false);
-                setLoading(true);
-                if (compatible) restart(absoluteTime);
-                else video.current?.load();
-              }}
-            >
-              <RotateCcw />
-              Retry
-            </button>
-            <button onClick={safeBack}>
-              <ArrowLeft />
-              Back
-            </button>
-          </div>
+          <p>Loading video…</p>
         </div>
       )}
       <div className="player-top">
@@ -519,6 +459,12 @@ export default function StreamingPlayer({
           }
         />
         <div className="controls-row">
+          <IconButton
+            label="Back 10 seconds"
+            onClick={() => seek(displayTime - 10)}
+          >
+            <RotateCcw />
+          </IconButton>
           <IconButton label={playing ? "Pause" : "Play"} onClick={toggle}>
             {playing ? (
               <Pause fill="currentColor" />
@@ -527,10 +473,10 @@ export default function StreamingPlayer({
             )}
           </IconButton>
           <IconButton
-            label="Back 10 seconds"
-            onClick={() => seek(displayTime - 10)}
+            label="Forward 10 seconds"
+            onClick={() => seek(displayTime + 10)}
           >
-            <RotateCcw />
+            <RotateCw />
           </IconButton>
           <IconButton
             label={volume ? "Mute" : "Unmute"}
