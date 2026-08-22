@@ -1,3 +1,5 @@
+import { catalogIdentity, catalogOverride } from "./catalog-overrides";
+
 export type DebridFile = {
   index: number;
   name: string;
@@ -93,22 +95,28 @@ export function groupDebridCatalog(
   magnets: DebridMagnetRecord[],
 ): CatalogTitle[] {
   const series = new Map<string, CatalogTitle>();
-  const movies: CatalogTitle[] = [];
+  const movies = new Map<string, CatalogTitle>();
   for (const magnet of magnets.filter((item) => item.statusCode === 4)) {
     const looksSeries =
       episodePattern.test(magnet.filename) ||
       seasonPattern.test(magnet.filename) ||
       magnet.videoFiles.some((file) => episodePattern.test(file.name));
     if (looksSeries) {
-      const title =
+      const parsedTitle =
         seriesTitle(magnet.filename) ||
         seriesTitle(magnet.videoFiles[0]?.name || "Series");
-      const key = slug(title);
+      const override = catalogOverride(
+        `${magnet.filename} ${magnet.videoFiles.map((file) => file.name).join(" ")}`,
+        "series",
+      );
+      const title = override?.title || parsedTitle;
+      const year = override?.year || yearFrom(magnet.filename);
+      const key = catalogIdentity(title, year);
       const existing = series.get(key) || {
-        id: `series-${key}`,
+        id: `series-${slug(title)}`,
         title,
         category: "series" as const,
-        year: yearFrom(magnet.filename),
+        year,
         seasonCount: 0,
         episodes: [],
         addedAt: magnet.uploadDate || 0,
@@ -139,12 +147,16 @@ export function groupDebridCatalog(
       series.set(key, existing);
     } else {
       magnet.videoFiles.forEach((file) => {
-        const title = movieTitle(file.name) || movieTitle(magnet.filename);
-        movies.push({
+        const parsedTitle = movieTitle(file.name) || movieTitle(magnet.filename);
+        const override = catalogOverride(`${file.name} ${magnet.filename}`, "movie");
+        const title = override?.title || parsedTitle;
+        const year = override?.year || yearFrom(file.name) || yearFrom(magnet.filename);
+        const key = catalogIdentity(title, year);
+        const candidate: CatalogTitle = {
           id: `movie-${magnet.id}-${file.index}`,
           title,
           category: "movie",
-          year: yearFrom(file.name) || yearFrom(magnet.filename),
+          year,
           seasonCount: 0,
           episodes: [
             {
@@ -161,16 +173,33 @@ export function groupDebridCatalog(
             },
           ],
           addedAt: magnet.uploadDate || 0,
-        });
+        };
+        const previous = movies.get(key);
+        if (!previous || previous.episodes[0].size < file.size)
+          movies.set(key, candidate);
       });
     }
   }
-  return [...series.values(), ...movies]
-    .map((item) => ({
-      ...item,
-      episodes: item.episodes.sort(
-        (a, b) => a.season - b.season || a.episode - b.episode,
-      ),
-    }))
+  return [...series.values(), ...movies.values()]
+    .map((item) => {
+      const episodes = [
+        ...new Map(
+          [...item.episodes]
+            .sort(
+              (a, b) =>
+                a.size - b.size || b.magnetId - a.magnetId || b.file - a.file,
+            )
+            .map((episode) => [`${episode.season}:${episode.episode}`, episode]),
+        ).values(),
+      ].sort((a, b) => a.season - b.season || a.episode - b.episode);
+      return {
+        ...item,
+        episodes,
+        seasonCount:
+          item.category === "series"
+            ? new Set(episodes.map((episode) => episode.season)).size
+            : 0,
+      };
+    })
     .sort((a, b) => b.addedAt - a.addedAt || a.title.localeCompare(b.title));
 }

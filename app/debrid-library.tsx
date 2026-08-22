@@ -21,14 +21,13 @@ import { parseWatchProgress, PlaybackQueueItem } from "./lib/watch-progress";
 import { Route } from "./routing";
 import { playKheyflixSting } from "./lib/brand-sting";
 
-const CATALOG_KEY = "kheyflix:catalog:v2",
+const CATALOG_KEY = "kheyflix:catalog:v3",
   METADATA_PREFIX = "kheyflix:metadata:",
   QUEUE_KEY = "kheyflix:playback-queue:v1";
 let catalogMemory: CatalogTitle[] | undefined,
   catalogRequest: Promise<CatalogTitle[]> | undefined;
 const metadataMemory = new Map<string, EnrichedMetadata | null>(),
-  metadataRequests = new Map<string, Promise<EnrichedMetadata | null>>(),
-  metadataStarted = new Set<string>();
+  metadataRequests = new Map<string, Promise<EnrichedMetadata | null>>();
 function cachedCatalog() {
   if (catalogMemory) return catalogMemory;
   if (typeof sessionStorage === "undefined") return [];
@@ -114,7 +113,6 @@ function readMetadata(key: string) {
 async function requestMetadata(item: CatalogTitle) {
   const key = metadataKey(item);
   if (metadataRequests.has(key)) return metadataRequests.get(key)!;
-  metadataStarted.add(key);
   const task = fetch(
     `/api/metadata?title=${encodeURIComponent(item.title)}&kind=${item.category}${item.year ? `&year=${item.year}` : ""}`,
   )
@@ -151,7 +149,7 @@ function useMetadata(item: CatalogTitle | undefined, eager = false) {
         active = false;
       };
     }
-    if (!eager && metadataStarted.size >= 8) return;
+    if (!eager) return;
     let active = true;
     void requestMetadata(item).then((value) => {
       if (active) setMetadata(value);
@@ -167,6 +165,12 @@ const size = (bytes: number) =>
   palette = ["#58151d", "#172a50", "#51411a", "#183e37", "#49235a", "#57301b"];
 const displayTitle = (item: CatalogTitle, metadata?: EnrichedMetadata | null) =>
   metadata?.canonicalTitle || item.title;
+const shortOverview = (overview?: string) => {
+  if (!overview) return undefined;
+  const firstTwoSentences = overview.match(/^.*?[.!?](?:\s+.*?[.!?])?/)?.[0];
+  const summary = firstTwoSentences || overview;
+  return summary.length > 220 ? `${summary.slice(0, 217).trim()}…` : summary;
+};
 function saveQueue(item: CatalogTitle) {
   const queue: PlaybackQueueItem[] = item.episodes.map((episode) => ({
     titleId: item.id,
@@ -216,13 +220,18 @@ function Artwork({
     kind === "card"
       ? metadata?.poster || metadata?.backdrop
       : metadata?.backdrop || metadata?.poster;
+  const portraitBackdrop =
+    kind !== "card" && !metadata?.backdrop && Boolean(metadata?.poster);
   return (
     <div
-      className={`catalog-art catalog-art-${kind}`}
+      className={`catalog-art catalog-art-${kind}${portraitBackdrop ? " portrait-backdrop" : ""}`}
       style={{
         backgroundImage: source
           ? `linear-gradient(0deg,rgba(0,0,0,.35),transparent 55%),url("${source}")`
           : `radial-gradient(circle at 72% 24%,${palette[index % palette.length]},#08090d 72%)`,
+        backgroundSize: portraitBackdrop ? "auto 94%" : undefined,
+        backgroundRepeat: portraitBackdrop ? "no-repeat" : undefined,
+        backgroundPosition: portraitBackdrop ? "72% center" : undefined,
       }}
     >
       {!source && (
@@ -243,9 +252,27 @@ function CatalogCard({
   index: number;
   navigate: (route: Route) => void;
 }) {
-  const metadata = useMetadata(item, index < 8);
+  const card = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(index < 8);
+  useEffect(() => {
+    if (visible || !card.current || typeof IntersectionObserver === "undefined")
+      return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    observer.observe(card.current);
+    return () => observer.disconnect();
+  }, [visible]);
+  const metadata = useMetadata(item, visible);
   return (
     <button
+      ref={card}
       className="library-card"
       onClick={() =>
         navigate({
@@ -411,7 +438,7 @@ export function DebridExperience({
               </span>
             </p>
             <p className="featured-description">
-              {featuredMetadata?.overview ||
+              {shortOverview(featuredMetadata?.overview) ||
                 (featured.category === "series"
                   ? `${featured.episodes.length} episodes across ${featured.seasonCount} seasons, ready to stream now on Kheyflix.`
                   : "Available to stream now from your Kheyflix catalog.")}

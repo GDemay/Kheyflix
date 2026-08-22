@@ -25,4 +25,19 @@
 @media(prefers-reduced-motion:reduce){.kheyflix-intro{animation-duration:.15s}.kheyflix-intro span,.kheyflix-intro strong{animation:none}}
 .debrid-hero .featured-description{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;max-width:570px}
 @media(max-width:420px){.catalog-grid{grid-template-columns:1fr}.catalog-grid .media-card{min-height:170px}.featured-copy h1{font-size:3.4rem}.featured-description{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}}
+
+/* Stronger original Kheyflix opening and corrected portrait hero treatment */
+.portrait-backdrop{background-color:#08090b!important;filter:saturate(.82) contrast(1.04)}
+.debrid-hero .featured-description{-webkit-line-clamp:3;max-width:500px;font-size:.93rem}
+.kheyflix-intro{overflow:hidden;animation:kIntroExit 2.4s ease both;background:radial-gradient(circle at center,#210207 0,#050505 42%,#000 75%)}
+.kheyflix-intro:before,.kheyflix-intro:after{content:"";position:absolute;inset:-30%;background:repeating-conic-gradient(from 12deg,transparent 0 5deg,#e5091422 6deg,transparent 8deg 17deg);filter:blur(3px);animation:kRays 2.1s cubic-bezier(.16,.84,.25,1) both}
+.kheyflix-intro:after{inset:0;background:radial-gradient(circle,#ff253244 0,transparent 10%,#0000 52%);filter:blur(18px);animation:kPulse 2.15s ease both}
+.kheyflix-intro span{z-index:2;font-size:clamp(9rem,26vw,23rem);text-shadow:-18px 0 #5d0309,18px 0 #ff3641,0 0 80px #e5091477;animation:kStrongMark 2.05s cubic-bezier(.16,.84,.25,1) both}
+.kheyflix-intro strong{z-index:3;margin-top:min(41vw,380px);font-size:.82rem;animation:kStrongWord 1.25s .72s both}
+@keyframes kStrongMark{0%{opacity:0;transform:scale(.12,.7) rotateY(55deg);filter:blur(28px)}24%{opacity:1;filter:blur(0)}52%{transform:scale(.92,1.08);text-shadow:-30px 0 #5d0309,30px 0 #ff3641,0 0 110px #e50914aa}100%{transform:scale(.78,1);text-shadow:-10px 0 #5d0309,10px 0 #ff3641,0 0 45px #e5091455}}
+@keyframes kStrongWord{from{opacity:0;letter-spacing:1.8em;filter:blur(8px)}to{opacity:1;letter-spacing:.72em;filter:none}}
+@keyframes kRays{0%{opacity:0;transform:scale(.25) rotate(-18deg)}36%{opacity:1}100%{opacity:0;transform:scale(1.25) rotate(7deg)}}
+@keyframes kPulse{0%,15%{opacity:0;transform:scale(.2)}40%{opacity:1}100%{opacity:0;transform:scale(2)}}
+@keyframes kIntroExit{0%,82%{opacity:1}100%{opacity:0;visibility:hidden}}
+@media(prefers-reduced-motion:reduce){.kheyflix-intro,.kheyflix-intro:before,.kheyflix-intro:after,.kheyflix-intro span,.kheyflix-intro strong{animation-duration:.15s!important;animation-delay:0s!important}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation-duration:.001ms!important}}

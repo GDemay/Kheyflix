@@ -137,7 +137,7 @@ export default function StreamingPlayer({
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
     [nativeDuration, setNativeDuration] = useState(0),
-    [volume, setVolume] = useState(1),
+    [volume, setVolume] = useState(0),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
     [controls, setControls] = useState(true),
@@ -233,7 +233,7 @@ export default function StreamingPlayer({
     });
   }, [compatible, navigate, next, persist, stop]);
   useEffect(() => {
-    const timer = setTimeout(() => setIntro(false), 1250);
+    const timer = setTimeout(() => setIntro(false), 2400);
     return () => clearTimeout(timer);
   }, []);
   useEffect(() => {
@@ -319,6 +319,7 @@ export default function StreamingPlayer({
         ref={video}
         src={source}
         autoPlay
+        muted
         playsInline
         preload="auto"
         onClick={toggle}
@@ -358,7 +359,7 @@ export default function StreamingPlayer({
           <track
             key={subtitle}
             kind="subtitles"
-            src={`/api/debrid/subtitle/${id}/${file}/${subtitle}`}
+            src={`/api/debrid/subtitle/${id}/${file}/${subtitle}?start=${compatible ? offset : 0}`}
             srcLang={
               info?.subtitles.find((track) => track.index === subtitle)
                 ?.language || "en"
