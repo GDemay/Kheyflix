@@ -6,6 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-vinext.mjs",
     "dev": "node scripts/run-dev.mjs",
     "build": "vinext build",
     "start": "node scripts/run-production.mjs",
