@@ -1,4 +1,4 @@
-export type Route = { section: 'home'|'movies'|'series'|'search'|'title'|'watch'|'profile'|'debrid'|'stream'; id?: string; file?:number; title?:string; query?: string; compat?:boolean };
+export type Route = { section: 'home'|'movies'|'series'|'search'|'discover'|'title'|'watch'|'profile'|'debrid'|'stream'; id?: string; file?:number; title?:string; query?: string; compat?:boolean };
 
 export const parseRoute = (location = '/'): Route => {
   const url = new URL(location, 'https://kheyflix.local');
@@ -8,6 +8,7 @@ export const parseRoute = (location = '/'): Route => {
   if (parts[0] === 'debrid') return { section:'debrid', id:decodeURIComponent(parts[1]||''), file:parts[2]===undefined?undefined:Number(parts[2]), title:url.searchParams.get('title') || 'Kheyflix title' };
   if (parts[0] === 'title') return { section:'title', id:parts[1] };
   if (parts[0] === 'profile') return { section:'profile' };
+  if (parts[0] === 'discover') return { section:'discover' };
   if (parts[0] === 'search') return { section:'search', query:url.searchParams.get('q') ?? '' };
   if (parts[0] === 'movies' || parts[0] === 'series') return { section:parts[0] };
   return { section:'home' };
