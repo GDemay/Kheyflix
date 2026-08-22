@@ -39,6 +39,22 @@ describe("compatible playback transcoder options", () => {
     ]);
   });
 
+  it.each([
+    ["480", "scale=-2:480", "900k"],
+    ["720", "scale=-2:720", "2200k"],
+    ["1080", "scale=-2:1080", "4500k"],
+  ])("builds a bounded %s adaptive profile", (quality, scale, bitrate) => {
+    const options = videoOutputOptions("h264", 2160, false, quality);
+    expect(options).toEqual(expect.arrayContaining(["-vf", scale, "-b:v", bitrate]));
+    expect(options).not.toContain("copy");
+  });
+
+  it("never upscales a lower resolution source", () => {
+    expect(videoOutputOptions("h264", 480, false, "1080")).toEqual(
+      expect.arrayContaining(["-vf", "scale=-2:480"]),
+    );
+  });
+
   it("preserves audio stream zero and safely defaults invalid selections", () => {
     expect(selectedStreamIndex("0")).toBe(0);
     expect(selectedStreamIndex("3.8")).toBe(3);
