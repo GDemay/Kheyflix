@@ -6,6 +6,7 @@ import { catalog, getTitle, MediaTitle } from './catalog';
 import ProfilePage from './profile-page';
 import { DebridDetails, DebridExperience } from './debrid-library';
 import { parseRoute, Route, routePath } from './routing';
+import StreamingPlayer from './streaming-player';
 
 const subscribeToNothing = () => () => undefined;
 
@@ -94,6 +95,7 @@ export default function KheyflixApp() {
   const hydrated=useSyncExternalStore(subscribeToNothing,()=>true,()=>false);
   const routeLocation=useSyncExternalStore((notify)=>{window.addEventListener('popstate',notify);window.addEventListener('kheyflix:navigate',notify);return()=>{window.removeEventListener('popstate',notify);window.removeEventListener('kheyflix:navigate',notify)}},()=>window.location.pathname+window.location.search,()=>'/');
   const route=parseRoute(routeLocation);const previousRoute=useRef<Route>({section:'home'});
+  useEffect(()=>{document.title=route.section==='stream'?`${route.title||'Now playing'} | Kheyflix`:'Kheyflix — Stories worth streaming'},[route.section,route.title]);
   const navigate=useCallback((next:Route,replace=false)=>{if(next.section==='title'||next.section==='watch')previousRoute.current=route;const path=routePath(next);window.history[replace?'replaceState':'pushState']({},'',path);window.dispatchEvent(new Event('kheyflix:navigate'));window.scrollTo({top:0,behavior:'smooth'})},[route]);
   const closeDetails=useCallback(()=>{if(window.history.length>1)window.history.back();else navigate(previousRoute.current,true)},[navigate]);
   const openTitle=(item:MediaTitle)=>navigate({section:'title',id:item.id});
@@ -101,7 +103,7 @@ export default function KheyflixApp() {
   const remoteItem:MediaTitle|undefined=route.section==='stream'&&route.id!==undefined&&route.file!==undefined?{id:`stream-${route.id}-${route.file}`,title:route.title||'Kheyflix video',category:'movie',year:new Date().getFullYear(),rating:'HD',duration:'On demand',match:100,genres:['Kheyflix'],description:'Available to stream now on Kheyflix.',cast:[],director:'Kheyflix',tone:'space',playable:true,source:{url:route.compat?`/api/debrid/transcode/${route.id}/${route.file}`:`/api/debrid/stream/${route.id}/${route.file}`,type:route.compat?'video/mp4':'video/x-matroska',attribution:route.compat?'Kheyflix compatible streaming · AAC audio':'Kheyflix secure streaming',licenseUrl:'#'}}:undefined;
   if(!hydrated)return <main className="app-shell" aria-label="Loading Kheyflix"/>;
   if(route.section==='watch'&&item)return <Player item={item} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'title',id:item.id},true)}}/>;
-  if(route.section==='stream'&&remoteItem)return <Player item={remoteItem} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'profile'},true)}}/>;
+  if(route.section==='stream'&&remoteItem)return <StreamingPlayer key={`${route.id}-${route.file}`} route={route} navigate={navigate} onBack={()=>{if(window.history.length>1)window.history.back();else navigate({section:'profile'},true)}}/>;
   return <main className="app-shell"><Header route={route} navigate={navigate}/>
     {route.section==='home'&&<DebridExperience section="home" navigate={navigate}/>}
     {(route.section==='movies'||route.section==='series')&&<DebridExperience section={route.section} navigate={navigate}/>}
