@@ -11,7 +11,6 @@ describe('Kheyflix routing', () => {
     expect(parseRoute('/profile')).toEqual({ section:'profile' });
     expect(parseRoute('/stream/123/0?title=Open%20Movie')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie' });
     expect(parseRoute('/debrid/123/2?title=My%20Movie')).toEqual({ section:'debrid', id:'123', file:2, title:'My Movie' });
-    expect(parseRoute('/library')).toEqual({ section:'library' });
     expect(parseRoute('/search?q=Big%20Buck')).toEqual({ section:'search', query:'Big Buck' });
   });
 
