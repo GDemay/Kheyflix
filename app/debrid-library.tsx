@@ -399,7 +399,7 @@ function Rail({
         <div className="media-rail" ref={rail} tabIndex={0}>
           {items.slice(0, 24).map((item, index) => (
             <CatalogCard
-              key={item.id}
+              key={`${item.id}-${index}`}
               item={item}
               index={index}
               navigate={navigate}
@@ -592,7 +592,7 @@ export function DebridExperience({
       <div className="library-grid">
         {filtered.map((item, index) => (
           <CatalogCard
-            key={item.id}
+            key={`${item.id}-${index}`}
             item={item}
             index={index}
             navigate={navigate}

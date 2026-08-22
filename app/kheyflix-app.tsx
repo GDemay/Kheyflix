@@ -63,12 +63,19 @@ function Header({
   navigate: (route: Route, replace?: boolean) => void;
 }) {
   const [menu, setMenu] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const searchOpen = route.section === "search";
   const query = route.query ?? "";
   const submit = (value: string) =>
     navigate({ section: "search", query: value }, true);
+  useEffect(() => {
+    const update = () => setScrolled(window.scrollY > 24);
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    return () => window.removeEventListener("scroll", update);
+  }, []);
   return (
-    <header className="app-header">
+    <header className={`app-header${scrolled ? " scrolled" : ""}`}>
       <button
         className="brand"
         type="button"
@@ -99,6 +106,7 @@ function Header({
             key={section}
             type="button"
             className={route.section === section ? "active" : ""}
+            aria-current={route.section === section ? "page" : undefined}
             onClick={() => {
               navigate({ section });
               setMenu(false);
