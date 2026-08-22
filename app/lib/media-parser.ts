@@ -1,6 +1,6 @@
 export type DebridFile={index:number;name:string;size:number;path:string};
 export type DebridMagnetRecord={id:number;filename:string;statusCode:number;uploadDate?:number;videoFiles:DebridFile[]};
-export type CatalogEpisode={magnetId:number;file:number;name:string;season:number;episode:number;size:number};
+export type CatalogEpisode={magnetId:number;file:number;name:string;season:number;episode:number;size:number;needsAudioCompatibility:boolean};
 export type CatalogTitle={id:string;title:string;category:'movie'|'series';year?:number;seasonCount:number;episodes:CatalogEpisode[];addedAt:number};
 
 const releaseNoise=/\b(?:2160p|1080p|720p|480p|uhd|bluray|blu-ray|web[ ._-]?dl|webrip|brrip|dvdrip|remux|hdr|hevc|x26[45]|h26[45]|av1|aac|eac3|dts|atmos|multi|french|vostfr|proper|repack|extended|unrated|10bit).*$/i;
@@ -18,10 +18,10 @@ export function groupDebridCatalog(magnets:DebridMagnetRecord[]):CatalogTitle[]{
     const looksSeries=episodePattern.test(magnet.filename)||seasonPattern.test(magnet.filename)||magnet.videoFiles.some(file=>episodePattern.test(file.name));
     if(looksSeries){
       const title=seriesTitle(magnet.filename)||seriesTitle(magnet.videoFiles[0]?.name||'Series'); const key=slug(title); const existing=series.get(key)||{id:`series-${key}`,title,category:'series' as const,year:yearFrom(magnet.filename),seasonCount:0,episodes:[],addedAt:magnet.uploadDate||0};
-      magnet.videoFiles.forEach(file=>{const match=file.name.match(episodePattern);const season=Number(match?.[1]||magnet.filename.match(seasonPattern)?.[1]||1);const episode=Number(match?.[2]||file.index+1);existing.episodes.push({magnetId:magnet.id,file:file.index,name:cleanReleaseName(file.name),season,episode,size:file.size})});
+      magnet.videoFiles.forEach(file=>{const match=file.name.match(episodePattern);const season=Number(match?.[1]||magnet.filename.match(seasonPattern)?.[1]||1);const episode=Number(match?.[2]||file.index+1);existing.episodes.push({magnetId:magnet.id,file:file.index,name:cleanReleaseName(file.name),season,episode,size:file.size,needsAudioCompatibility:/\b(?:e-?ac-?3|eac3|dts(?:-?hd)?|truehd|ac-?3)\b/i.test(`${magnet.filename} ${file.name}`)})});
       existing.addedAt=Math.max(existing.addedAt,magnet.uploadDate||0);existing.seasonCount=new Set(existing.episodes.map(item=>item.season)).size;series.set(key,existing);
     }else{
-      magnet.videoFiles.forEach(file=>{const title=cleanReleaseName(file.name)||cleanReleaseName(magnet.filename);movies.push({id:`movie-${magnet.id}-${file.index}`,title,category:'movie',year:yearFrom(file.name)||yearFrom(magnet.filename),seasonCount:0,episodes:[{magnetId:magnet.id,file:file.index,name:title,season:0,episode:0,size:file.size}],addedAt:magnet.uploadDate||0})});
+      magnet.videoFiles.forEach(file=>{const title=cleanReleaseName(file.name)||cleanReleaseName(magnet.filename);movies.push({id:`movie-${magnet.id}-${file.index}`,title,category:'movie',year:yearFrom(file.name)||yearFrom(magnet.filename),seasonCount:0,episodes:[{magnetId:magnet.id,file:file.index,name:title,season:0,episode:0,size:file.size,needsAudioCompatibility:/\b(?:e-?ac-?3|eac3|dts(?:-?hd)?|truehd|ac-?3)\b/i.test(`${magnet.filename} ${file.name}`)}],addedAt:magnet.uploadDate||0})});
     }
   }
   return [...series.values(),...movies].map(item=>({...item,episodes:item.episodes.sort((a,b)=>a.season-b.season||a.episode-b.episode)})).sort((a,b)=>b.addedAt-a.addedAt||a.title.localeCompare(b.title));
