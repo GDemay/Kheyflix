@@ -22,7 +22,7 @@ import { Route } from "./routing";
 import { playKheyflixSting } from "./lib/brand-sting";
 
 const CATALOG_KEY = "kheyflix:catalog:v3",
-  METADATA_PREFIX = "kheyflix:metadata:",
+  METADATA_PREFIX = "kheyflix:metadata:v2:",
   QUEUE_KEY = "kheyflix:playback-queue:v1";
 let catalogMemory: CatalogTitle[] | undefined,
   catalogRequest: Promise<CatalogTitle[]> | undefined;
@@ -121,10 +121,12 @@ async function requestMetadata(item: CatalogTitle) {
         metadata: EnrichedMetadata | null;
       };
       const value = data.metadata || null;
-      metadataMemory.set(key, value);
-      try {
-        sessionStorage.setItem(METADATA_PREFIX + key, JSON.stringify(value));
-      } catch {}
+      if (value) {
+        metadataMemory.set(key, value);
+        try {
+          sessionStorage.setItem(METADATA_PREFIX + key, JSON.stringify(value));
+        } catch {}
+      }
       return value;
     })
     .catch(() => null)
@@ -724,6 +726,14 @@ export function DebridDetails({
               <>
                 Metadata provided by TMDB. This product uses the TMDB API but is
                 not endorsed or certified by TMDB.
+              </>
+            ) : metadata?.provider === "wikipedia" ? (
+              <>
+                Artwork and description provided by{" "}
+                <a href={metadata.providerUrl} target="_blank" rel="noreferrer">
+                  Wikipedia
+                </a>
+                .
               </>
             ) : null}
           </p>

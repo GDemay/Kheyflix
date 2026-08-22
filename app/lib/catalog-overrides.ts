@@ -31,6 +31,15 @@ const SERIES_OVERRIDES: CatalogOverride[] = [
 ];
 
 const MOVIE_OVERRIDES: CatalogOverride[] = [
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:1|i)\b.*phantom[ ._-]+menace|phantom[ ._-]+menace)\b/i, title: "Star Wars: Episode I – The Phantom Menace", year: 1999 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:2|ii)\b.*attack[ ._-]+of[ ._-]+the[ ._-]+clones|attack[ ._-]+of[ ._-]+the[ ._-]+clones)\b/i, title: "Star Wars: Episode II – Attack of the Clones", year: 2002 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:3|iii)\b.*revenge[ ._-]+of[ ._-]+the[ ._-]+sith|revenge[ ._-]+of[ ._-]+the[ ._-]+sith)\b/i, title: "Star Wars: Episode III – Revenge of the Sith", year: 2005 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:4|iv)\b.*(?:a[ ._-]+)?new[ ._-]+hope|(?:a[ ._-]+)?new[ ._-]+hope)\b/i, title: "Star Wars: Episode IV – A New Hope", year: 1977 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:5|v)\b.*empire[ ._-]+strikes[ ._-]+back|empire[ ._-]+strikes[ ._-]+back)\b/i, title: "Star Wars: Episode V – The Empire Strikes Back", year: 1980 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:6|vi)\b.*return[ ._-]+of[ ._-]+the[ ._-]+jedi|return[ ._-]+of[ ._-]+the[ ._-]+jedi)\b/i, title: "Star Wars: Episode VI – Return of the Jedi", year: 1983 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:7|vii)\b.*force[ ._-]+awakens|force[ ._-]+awakens)\b/i, title: "Star Wars: Episode VII – The Force Awakens", year: 2015 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:8|viii)\b.*last[ ._-]+jedi|the[ ._-]+last[ ._-]+jedi)\b/i, title: "Star Wars: Episode VIII – The Last Jedi", year: 2017 },
+  { match: /\bstar[ ._-]+wars\b.*\b(?:episode[ ._-]+(?:9|ix)\b.*rise[ ._-]+of[ ._-]+skywalker|rise[ ._-]+of[ ._-]+skywalker)\b/i, title: "Star Wars: Episode IX – The Rise of Skywalker", year: 2019 },
   { match: /\bshrek(?:[ ._-]+1)?(?:[ ._-]+animation)?[ ._-]+2001\b/i, title: "Shrek", year: 2001 },
   { match: /\bshrek[ ._-]+2(?:[ ._-]+animation)?[ ._-]+2004\b/i, title: "Shrek 2", year: 2004 },
   { match: /\bshrek(?:[ ._-]+3|[ ._-]+the[ ._-]+third)(?:[ ._-]+animation)?[ ._-]+2007\b/i, title: "Shrek the Third", year: 2007 },
