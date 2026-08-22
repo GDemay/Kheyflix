@@ -171,6 +171,60 @@ const shortOverview = (overview?: string) => {
   const summary = firstTwoSentences || overview;
   return summary.length > 220 ? `${summary.slice(0, 217).trim()}…` : summary;
 };
+const TRAILER_PROGRESS_PREFIX = "kheyflix:trailer-progress:";
+const youtubeId = (url?: string) => {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1) || undefined;
+    if (parsed.hostname.endsWith("youtube.com"))
+      return parsed.searchParams.get("v") || parsed.pathname.split("/").pop();
+  } catch {}
+  return undefined;
+};
+function TrailerPreview({ item, url }: { item: CatalogTitle; url: string }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const id = youtubeId(url);
+  const storageKey = `${TRAILER_PROGRESS_PREFIX}${item.id}`;
+  const [start] = useState(() => {
+    try {
+      return Math.max(0, Number(sessionStorage.getItem(storageKey)) || 0);
+    } catch {
+      return 0;
+    }
+  });
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow) return;
+      try {
+        const message =
+          typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        const currentTime = Number(message?.info?.currentTime);
+        if (Number.isFinite(currentTime))
+          sessionStorage.setItem(storageKey, String(currentTime));
+      } catch {}
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [storageKey]);
+  if (!id) return null;
+  const source = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&enablejsapi=1&start=${Math.floor(start)}`;
+  return (
+    <iframe
+      ref={frame}
+      className="catalog-trailer"
+      src={source}
+      title={`${displayTitle(item)} trailer`}
+      allow="autoplay; encrypted-media; picture-in-picture"
+      onLoad={() =>
+        frame.current?.contentWindow?.postMessage(
+          JSON.stringify({ event: "listening", id: item.id }),
+          "*",
+        )
+      }
+    />
+  );
+}
 function saveQueue(item: CatalogTitle) {
   const queue: PlaybackQueueItem[] = item.episodes.map((episode) => ({
     titleId: item.id,
@@ -254,6 +308,7 @@ function CatalogCard({
 }) {
   const card = useRef<HTMLButtonElement>(null);
   const [visible, setVisible] = useState(index < 8);
+  const [previewing, setPreviewing] = useState(false);
   useEffect(() => {
     if (visible || !card.current || typeof IntersectionObserver === "undefined")
       return;
@@ -269,11 +324,16 @@ function CatalogCard({
     observer.observe(card.current);
     return () => observer.disconnect();
   }, [visible]);
-  const metadata = useMetadata(item, visible);
+  const metadata = useMetadata(item, visible || previewing);
+  const trailer = metadata?.trailerUrl;
   return (
     <button
       ref={card}
       className="library-card"
+      onMouseEnter={() => setPreviewing(true)}
+      onMouseLeave={() => setPreviewing(false)}
+      onFocus={() => setPreviewing(true)}
+      onBlur={() => setPreviewing(false)}
       onClick={() =>
         navigate({
           section: "debrid",
@@ -284,6 +344,7 @@ function CatalogCard({
     >
       <span className="library-card-art">
         <Artwork item={item} metadata={metadata} index={index} />
+        {previewing && trailer && <TrailerPreview item={item} url={trailer} />}
         <em>
           {item.category === "series"
             ? `${item.seasonCount} ${item.seasonCount === 1 ? "SEASON" : "SEASONS"}`
