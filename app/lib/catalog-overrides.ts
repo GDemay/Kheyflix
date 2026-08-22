@@ -29,6 +29,9 @@ const SERIES_OVERRIDES: CatalogOverride[] = [
   { match: /\bcareme\b/i, title: "Carême", year: 2025 },
   { match: /\bthe[ ._-]+mentalist\b/i, title: "The Mentalist", year: 2008 },
   { match: /\bheroes\b/i, title: "Heroes", year: 2006 },
+  { match: /(?<!smiling[ ._-])\bfriends\b/i, title: "Friends", year: 1994 },
+  { match: /\bfuturama\b/i, title: "Futurama", year: 1999 },
+  { match: /\bavatar[ ._-]+(?:le[ ._-]+dernier[ ._-]+)?maitre[ ._-]+de[ ._-]+l[' ._-]*air\b/i, title: "Avatar: The Last Airbender", year: 2005 },
 ];
 
 const MOVIE_OVERRIDES: CatalogOverride[] = [

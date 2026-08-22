@@ -33,9 +33,9 @@ export type CatalogTitle = {
 };
 
 const releaseNoise =
-  /\b(?:2160p|1080p|720p|480p|uhd|bluray|blu-ray|web[ ._-]?dl|webrip|brrip|dvdrip|remux|hdr|hevc|x26[45]|h26[45]|av1|aac|eac3|dts|atmos|multi|french|vostfr|proper|repack|extended|unrated|10bit).*$/i;
+  /\b(?:2160p|1080p|720p|576p|480p|4k|uhd|hdtv|hdlight|bluray|blu-ray|web[ ._-]?dl|webrip|brrip|dvdrip|remux|hdr|hevc|x26[45]|h26[45]|av1|aac|eac3|dts|atmos|multi|truefrench|french|vostfr|vof|vff|voa|full[ ._-]?sbs|proper|repack|extended|unrated|directors?[ ._-]+cut|10bit).*$/i;
 const episodePattern =
-  /(?:^|[^a-z0-9])S(\d{1,2})E(\d{1,3})(?:[ ._-]*E?(\d{1,3}))?/i;
+  /(?:^|[^a-z0-9])(?:S(\d{1,2})E(\d{1,3})(?:[ ._-]*E?(\d{1,3}))?|(\d{1,2})x(\d{1,3}))(?:[^a-z0-9]|$)/i;
 const seasonPattern =
   /(?:^|[^a-z0-9])(?:S(?:eason)?[ ._-]?)(\d{1,2})(?:[ ._-]*(?:-|to)[ ._-]*S?(\d{1,2}))?/i;
 
@@ -77,6 +77,20 @@ const seriesTitle = (value: string) =>
     .replace(/\s*\((?:19|20)\d{2}\)\s*$/, "")
     .replace(/\s+(?:complete|collection)$/i, "")
     .trim();
+const parsedEpisode = (value: string) => {
+  const match = value.match(episodePattern);
+  return match
+    ? { season: Number(match[1] || match[4]), episode: Number(match[2] || match[5]) }
+    : undefined;
+};
+const numberedAvatarEpisode = (value: string) => {
+  if (!/\bavatar[ ._-]+le[ ._-]+dernier[ ._-]+maitre[ ._-]+de[ ._-]+l[' ._-]*air\b/i.test(value)) return undefined;
+  const absolute = Number(value.match(/[ ._-]+(\d{1,2})(?:\.[a-z0-9]{2,5})?$/i)?.[1]);
+  if (!absolute || absolute > 61) return undefined;
+  if (absolute <= 20) return { season: 1, episode: absolute };
+  if (absolute <= 40) return { season: 2, episode: absolute - 20 };
+  return { season: 3, episode: absolute - 40 };
+};
 const movieTitle = (value: string) => {
   const cleaned = cleanReleaseName(value),
     year = yearFrom(cleaned);
@@ -102,10 +116,12 @@ export function groupDebridCatalog(
   const series = new Map<string, CatalogTitle>();
   const movies = new Map<string, CatalogTitle>();
   for (const magnet of magnets.filter((item) => item.statusCode === 4)) {
+    const largestVideo = Math.max(0, ...magnet.videoFiles.map((file) => file.size));
     const looksSeries =
       episodePattern.test(magnet.filename) ||
       seasonPattern.test(magnet.filename) ||
-      magnet.videoFiles.some((file) => episodePattern.test(file.name));
+      magnet.videoFiles.some((file) => episodePattern.test(file.name)) ||
+      magnet.videoFiles.some((file) => numberedAvatarEpisode(file.name));
     if (looksSeries) {
       const parsedTitle =
         seriesTitle(magnet.filename) ||
@@ -127,11 +143,10 @@ export function groupDebridCatalog(
         addedAt: magnet.uploadDate || 0,
       };
       magnet.videoFiles.forEach((file) => {
-        const match = file.name.match(episodePattern);
-        const season = Number(
-          match?.[1] || magnet.filename.match(seasonPattern)?.[1] || 1,
-        );
-        const episode = Number(match?.[2] || file.index + 1);
+        const parsed = parsedEpisode(file.name) || numberedAvatarEpisode(file.name);
+        if (!parsed && /\bbonus\b/i.test(file.name)) return;
+        const season = parsed?.season || Number(magnet.filename.match(seasonPattern)?.[1] || 1);
+        const episode = parsed?.episode || file.index + 1;
         existing.episodes.push({
           magnetId: magnet.id,
           file: file.index,
@@ -152,7 +167,10 @@ export function groupDebridCatalog(
       series.set(key, existing);
     } else {
       magnet.videoFiles.forEach((file) => {
-        if (magnet.videoFiles.length > 1 && isAuxiliaryVideo(file.name)) return;
+        if (
+          magnet.videoFiles.length > 1 &&
+          (isAuxiliaryVideo(file.name) || file.size < largestVideo * 0.2)
+        ) return;
         const fileTitle = movieTitle(file.name);
         const parsedTitle = hasMeaningfulTitle(fileTitle)
           ? fileTitle
