@@ -1,7 +1,8 @@
 import { describe,expect,it } from 'vitest';
-import { groupDebridCatalog } from './media-parser';
+import { cleanEpisodeName,cleanReleaseName,groupDebridCatalog } from './media-parser';
 
 describe('AllDebrid catalog grouping',()=>{
   it('groups season magnets and episodes into one series title',()=>{const result=groupDebridCatalog([{id:1,filename:'MA_SERIES Season 3 1080p',statusCode:4,videoFiles:[{index:0,name:'MA_SERIES_S03E03_1080p.mkv',size:10,path:''}]},{id:2,filename:'MA SERIES S02 WEB-DL',statusCode:4,videoFiles:[{index:0,name:'MA.SERIES.S02E01.mkv',size:10,path:''}]}]);expect(result).toHaveLength(1);expect(result[0]).toMatchObject({title:'MA SERIES',category:'series',seasonCount:2});expect(result[0].episodes.map(e=>[e.season,e.episode])).toEqual([[2,1],[3,3]])});
-  it('keeps standalone files as movies',()=>{const [movie]=groupDebridCatalog([{id:7,filename:'Example Movie 2024 1080p',statusCode:4,videoFiles:[{index:0,name:'Example.Movie.2024.1080p.mkv',size:20,path:''}]}]);expect(movie).toMatchObject({title:'Example Movie 2024',category:'movie',year:2024});expect(movie.episodes[0]).toMatchObject({magnetId:7,file:0})});
+  it('keeps standalone files as movies',()=>{const [movie]=groupDebridCatalog([{id:7,filename:'Example Movie 2024 1080p',statusCode:4,videoFiles:[{index:0,name:'Example.Movie.2024.1080p.mkv',size:20,path:''}]}]);expect(movie).toMatchObject({title:'Example Movie',category:'movie',year:2024});expect(movie.episodes[0]).toMatchObject({magnetId:7,file:0})});
+  it('cleans release indexes, language tags, and broken episode suffixes',()=>{expect(cleanReleaseName('03 Shrek The Third - Animation 2007 Eng Fre Ita Spa')).toBe('Shrek The Third - Animation 2007');expect(groupDebridCatalog([{id:8,filename:'03 Shrek The Third - Animation 2007 Eng Fre Ita Spa',statusCode:4,videoFiles:[{index:0,name:'03 Shrek The Third - Animation 2007 Eng Fre Ita Spa.mkv',size:20,path:''}]}])[0].title).toBe('Shrek The Third');expect(cleanEpisodeName('The Mentalist (2008) - S02E01 - 1Redemption (',1)).toBe('Redemption')});
 });

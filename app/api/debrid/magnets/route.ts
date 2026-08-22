@@ -1,12 +1,12 @@
-import { AllDebridError, listMagnets, uploadMagnet } from '../../../lib/alldebrid';
+import { AllDebridError, listMagnetsCached, uploadMagnet } from '../../../lib/alldebrid';
 
 const failure = (error:unknown) => {
   const known = error instanceof AllDebridError ? error : new AllDebridError('Unexpected media service error.');
   return Response.json({error:{code:known.code,message:known.message}},{status:known.status});
 };
 
-export async function GET() {
-  try { return Response.json({magnets:await listMagnets()},{headers:{'Cache-Control':'no-store'}}); }
+export async function GET(request:Request) {
+  try { const result=await listMagnetsCached(new URL(request.url).searchParams.get('refresh')==='1');return Response.json(result,{headers:{'Cache-Control':'private, max-age=60, stale-while-revalidate=300','X-Kheyflix-Cache':result.stale?'stale':result.cached?'hit':'miss'}}); }
   catch(error) { return failure(error); }
 }
 

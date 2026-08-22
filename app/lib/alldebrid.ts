@@ -10,6 +10,16 @@ type FileNode = { n:string; s?:number; l?:string; e?:FileNode[] };
 export type DebridVideoFile = { index:number; name:string; size:number; path:string };
 export type DebridMagnet = { id:number; filename:string; size:number; status:string; statusCode:number; downloaded?:number; downloadSpeed?:number; videoFiles:DebridVideoFile[] };
 
+type CacheEntry<T> = { value:T; updatedAt:number };
+const shared = globalThis as typeof globalThis & {
+  __kheyflixMagnetCache?:CacheEntry<DebridMagnet[]>;
+  __kheyflixMagnetRequest?:Promise<DebridMagnet[]>;
+  __kheyflixStreamCache?:Map<string,CacheEntry<{url:string;name:string;size:number}>>;
+};
+const CATALOG_FRESH_MS=5*60_000;
+const CATALOG_STALE_MS=24*60*60_000;
+const STREAM_FRESH_MS=10*60_000;
+
 const apiKey = () => {
   const key = process.env.ALLDEBRID_API_KEY;
   if (!key) throw new AllDebridError('AllDebrid is not configured. Set ALLDEBRID_API_KEY on the server.', 'ALLDEBRID_NOT_CONFIGURED', 503);
@@ -49,12 +59,24 @@ async function filesForMagnets(ids:number[]) {
   }));
 }
 
-export async function listMagnets():Promise<DebridMagnet[]> {
-  const data = await request<{magnets:Array<Omit<DebridMagnet,'videoFiles'>>}>('/v4.1/magnet/status');
-  const magnets=data.magnets || [];
+async function fetchMagnets():Promise<DebridMagnet[]> {
+  const data=await request<{magnets:Array<Omit<DebridMagnet,'videoFiles'>>}>('/v4.1/magnet/status');
+  const magnets=data.magnets||[];
   const files=await filesForMagnets(magnets.filter(magnet=>magnet.statusCode===4).map(magnet=>magnet.id));
-  return magnets.map(magnet=>({...magnet,videoFiles:files.get(magnet.id) || []}));
+  return magnets.map(magnet=>({...magnet,videoFiles:files.get(magnet.id)||[]}));
 }
+
+export async function listMagnetsCached(force=false):Promise<{magnets:DebridMagnet[];cached:boolean;stale:boolean}> {
+  const now=Date.now();const cached=shared.__kheyflixMagnetCache;
+  if(!force&&cached&&now-cached.updatedAt<CATALOG_FRESH_MS)return{magnets:cached.value,cached:true,stale:false};
+  if(!shared.__kheyflixMagnetRequest){
+    shared.__kheyflixMagnetRequest=fetchMagnets().then(value=>{shared.__kheyflixMagnetCache={value,updatedAt:Date.now()};return value}).finally(()=>{shared.__kheyflixMagnetRequest=undefined});
+  }
+  try{return{magnets:await shared.__kheyflixMagnetRequest,cached:false,stale:false}}
+  catch(error){if(cached&&now-cached.updatedAt<CATALOG_STALE_MS)return{magnets:cached.value,cached:true,stale:true};throw error}
+}
+
+export async function listMagnets():Promise<DebridMagnet[]>{return(await listMagnetsCached()).magnets}
 
 export async function uploadMagnet(magnet:string) {
   const normalized = magnet.trim();
@@ -67,12 +89,16 @@ export async function uploadMagnet(magnet:string) {
 
 export async function resolveVideo(id:number,index:number) {
   if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(index) || index < 0) throw new AllDebridError('Invalid media selection.','INVALID_MEDIA',400);
+  const key=`${id}:${index}`;const cached=shared.__kheyflixStreamCache?.get(key);
+  if(cached&&Date.now()-cached.updatedAt<STREAM_FRESH_MS)return cached.value;
   const videos = await filesForMagnet(id);
   const selected = videos[index];
   if (!selected) throw new AllDebridError('Video file not found.','VIDEO_NOT_FOUND',404);
   const unlocked = await request<{link?:string;filename?:string;filesize?:number;delayed?:number}>('/v4/link/unlock',{link:selected.link});
   if (!unlocked.link) throw new AllDebridError(unlocked.delayed ? 'The stream is still being prepared. Try again shortly.' : 'The stream could not be unlocked.','STREAM_PREPARING',409);
-  return {url:unlocked.link,name:unlocked.filename || selected.name,size:unlocked.filesize || selected.size};
+  const value={url:unlocked.link,name:unlocked.filename||selected.name,size:unlocked.filesize||selected.size};
+  (shared.__kheyflixStreamCache??=new Map()).set(key,{value,updatedAt:Date.now()});
+  return value;
 }
 
 export const contentTypeFor = (filename:string) => {
