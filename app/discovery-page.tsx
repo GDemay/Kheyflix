@@ -51,23 +51,27 @@ export default function DiscoveryPage({
   const [error, setError] = useState("");
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [preparations, setPreparations] = useState<Record<string, Preparation>>({});
-  const [kindFilter, setKindFilter] = useState("all");
+  const [searchKind, setSearchKind] = useState<"movie" | "series">("movie");
+  const [requestedSeason, setRequestedSeason] = useState("");
+  const [requestedEpisode, setRequestedEpisode] = useState("");
   const [seasonFilter, setSeasonFilter] = useState("all");
+  const [episodeFilter, setEpisodeFilter] = useState("all");
   const [qualityFilter, setQualityFilter] = useState("all");
   const [subtitleFilter, setSubtitleFilter] = useState("all");
 
   const filterOptions = useMemo(() => ({
     seasons: [...new Set(results.map((result) => result.metadata.season).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
+    episodes: [...new Set(results.filter((result) => seasonFilter === "all" || result.metadata.season === Number(seasonFilter)).map((result) => result.metadata.episode).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
     qualities: [...new Set(results.map((result) => result.metadata.resolution).filter((value): value is NonNullable<Result["metadata"]["resolution"]> => Boolean(value)))],
     subtitles: [...new Set(results.flatMap((result) => result.metadata.subtitleLanguages))].sort(),
-  }), [results]);
+  }), [results, seasonFilter]);
 
   const visibleResults = useMemo(() => results.filter((result) =>
-    (kindFilter === "all" || result.category === kindFilter) &&
     (seasonFilter === "all" || result.metadata.season === Number(seasonFilter)) &&
+    (episodeFilter === "all" || (result.metadata.episode !== undefined && Number(episodeFilter) >= result.metadata.episode && Number(episodeFilter) <= (result.metadata.episodeEnd || result.metadata.episode))) &&
     (qualityFilter === "all" || result.metadata.resolution === qualityFilter) &&
     (subtitleFilter === "all" || result.metadata.subtitleLanguages.includes(subtitleFilter)),
-  ), [results, kindFilter, seasonFilter, qualityFilter, subtitleFilter]);
+  ), [results, seasonFilter, episodeFilter, qualityFilter, subtitleFilter]);
 
   const activeIds = useMemo(
     () =>
@@ -85,12 +89,15 @@ export default function DiscoveryPage({
     setSearching(true);
     setError("");
     try {
-      const response = await fetch(`/api/discovery/search?q=${encodeURIComponent(term)}`);
+      const parameters = new URLSearchParams({ q: term, kind: searchKind });
+      if (searchKind === "series" && requestedSeason) parameters.set("season", requestedSeason);
+      if (searchKind === "series" && requestedEpisode) parameters.set("episode", requestedEpisode);
+      const response = await fetch(`/api/discovery/search?${parameters}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || "Search is unavailable.");
       setResults(data.results || []);
-      setKindFilter("all");
       setSeasonFilter("all");
+      setEpisodeFilter("all");
       setQualityFilter("all");
       setSubtitleFilter("all");
     } catch (reason) {
@@ -203,6 +210,10 @@ export default function DiscoveryPage({
         <p><Sparkles /> KHEYFLIX DISCOVERY</p>
         <h1>Find it. Get it ready. Press play.</h1>
         <span>Search connected sources and prepare authorized titles for your Kheyflix library.</span>
+        <div className="discovery-kind" role="group" aria-label="Content type">
+          <button type="button" className={searchKind === "movie" ? "active" : ""} onClick={() => { setSearchKind("movie"); setRequestedSeason(""); setRequestedEpisode(""); }}><Film /> Movies</button>
+          <button type="button" className={searchKind === "series" ? "active" : ""} onClick={() => setSearchKind("series")}><Tv /> Series</button>
+        </div>
         <form onSubmit={search} className="discovery-search">
           <Search />
           <input
@@ -216,6 +227,12 @@ export default function DiscoveryPage({
             {searching ? <LoaderCircle className="spin" /> : "Search"}
           </button>
         </form>
+        {searchKind === "series" && (
+          <div className="discovery-episode-picker">
+            <label><span>Season <small>(optional)</small></span><input aria-label="Season to search" type="number" inputMode="numeric" min="1" max="99" placeholder="Any" value={requestedSeason} onChange={(event) => { const value = event.target.value; setRequestedSeason(value); if (!value) setRequestedEpisode(""); }} /></label>
+            <label><span>Episode <small>(optional)</small></span><input aria-label="Episode to search" type="number" inputMode="numeric" min="1" max="999" placeholder={requestedSeason ? "Any" : "Choose season first"} disabled={!requestedSeason} value={requestedEpisode} onChange={(event) => setRequestedEpisode(event.target.value)} /></label>
+          </div>
+        )}
         <label className="discovery-rights">
           <input
             type="checkbox"
@@ -233,8 +250,8 @@ export default function DiscoveryPage({
       )}
       {results.length > 0 && (
         <div className="discovery-filters" aria-label="Result filters">
-          <div><span>Type</span><select aria-label="Filter by type" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All</option><option value="movie">Movies</option><option value="series">Series</option></select></div>
-          <div><span>Season</span><select aria-label="Filter by season" value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value)}><option value="all">Any season</option>{filterOptions.seasons.map((season) => <option value={season} key={season}>Season {season}</option>)}</select></div>
+          {searchKind === "series" && <div><span>Season</span><select aria-label="Filter by season" value={seasonFilter} onChange={(event) => { setSeasonFilter(event.target.value); setEpisodeFilter("all"); }}><option value="all">Any season</option>{filterOptions.seasons.map((season) => <option value={season} key={season}>Season {season}</option>)}</select></div>}
+          {searchKind === "series" && <div><span>Episode</span><select aria-label="Filter by episode" value={episodeFilter} onChange={(event) => setEpisodeFilter(event.target.value)}><option value="all">Any episode</option>{filterOptions.episodes.map((episode) => <option value={episode} key={episode}>Episode {episode}</option>)}</select></div>}
           <div><span>Quality</span><select aria-label="Filter by quality" value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}><option value="all">Any quality</option>{filterOptions.qualities.map((quality) => <option value={quality} key={quality}>{quality}</option>)}</select></div>
           <div><span>Subtitles</span><select aria-label="Filter by subtitles" value={subtitleFilter} onChange={(event) => setSubtitleFilter(event.target.value)}><option value="all">Any subtitles</option>{filterOptions.subtitles.map((language) => <option value={language} key={language}>{language}</option>)}</select></div>
           <strong>{visibleResults.length} result{visibleResults.length === 1 ? "" : "s"}</strong>

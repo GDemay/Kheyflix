@@ -33,4 +33,10 @@ describe("release title parser", () => {
       videoCodec: "AV1",
     });
   });
+
+  it("recognizes common subtitle language and VOST tags", () => {
+    expect(parseReleaseTitle("Film.2025.1080p.WEB-DL.FRENCH.SUBS").subtitleLanguages).toEqual(["French"]);
+    expect(parseReleaseTitle("Serie.S01E02.VOSTFR.EN.SUBS.720p").subtitleLanguages).toEqual(["English", "French"]);
+    expect(parseReleaseTitle("Movie.2024.ITA.SUBBED.SPA.SUBS").subtitleLanguages).toEqual(["Spanish", "Italian"]);
+  });
 });

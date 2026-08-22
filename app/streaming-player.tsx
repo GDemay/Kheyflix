@@ -30,6 +30,12 @@ import {
   QualityMode,
   RenditionQuality,
 } from "./lib/playback";
+import {
+  defaultPlaybackPreferences,
+  parsePlaybackPreferences,
+  PlaybackPreferences,
+  serializePlaybackPreferences,
+} from "./lib/playback-preferences";
 import { Route } from "./routing";
 
 type MediaInfo = {
@@ -53,7 +59,8 @@ type MediaInfo = {
   }>;
 };
 const PROGRESS_KEY = "kheyflix:progress:v1",
-  QUEUE_KEY = "kheyflix:playback-queue:v1";
+  QUEUE_KEY = "kheyflix:playback-queue:v1",
+  PREFERENCES_KEY = "kheyflix:playback-preferences:v1";
 const formatTime = (value: number) =>
   Number.isFinite(value)
     ? `${Math.floor(value / 3600) ? `${Math.floor(value / 3600)}:` : ""}${Math.floor(
@@ -132,7 +139,9 @@ export default function StreamingPlayer({
       }),
       [currentQueue, file, id],
     ),
-    next = nextInQueue(queue, identity);
+    next = nextInQueue(queue, identity),
+    preferenceKey =
+      currentQueue?.seriesId || currentQueue?.titleId || identity.titleId;
   const [info, setInfo] = useState<MediaInfo>(),
     [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
@@ -146,7 +155,10 @@ export default function StreamingPlayer({
     [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">(
       "medium",
     ),
-    [menu, setMenu] = useState<"audio" | "subtitles" | "settings" | null>(null),
+    [preferences, setPreferences] = useState(defaultPlaybackPreferences),
+    [menu, setMenu] = useState<
+      "audio" | "subtitles" | "settings" | null
+    >(null),
     [playing, setPlaying] = useState(false),
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
@@ -162,7 +174,7 @@ export default function StreamingPlayer({
     displayTime = scrub ?? absoluteTime;
   const source = mediaReady
     ? transcoded
-      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
+      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
   const playbackTitle = currentQueue?.seriesTitle
@@ -175,6 +187,21 @@ export default function StreamingPlayer({
       else void fetch(url, { method: "POST", keepalive: true });
     },
     [file, id, session],
+  );
+  const updatePreferences = useCallback(
+    (change: Partial<PlaybackPreferences>) => {
+      setPreferences((current) => {
+        const next = { ...current, ...change };
+        try {
+          localStorage.setItem(
+            `${PREFERENCES_KEY}:${preferenceKey}`,
+            serializePlaybackPreferences(next),
+          );
+        } catch {}
+        return next;
+      });
+    },
+    [preferenceKey],
   );
   const persist = useCallback(
     (position = absoluteTime) => {
@@ -289,9 +316,28 @@ export default function StreamingPlayer({
       .then((value: MediaInfo) => {
         if (!active) return;
         setInfo(value);
+        const savedPreferences = parsePlaybackPreferences(
+          localStorage.getItem(`${PREFERENCES_KEY}:${preferenceKey}`),
+        );
+        setPreferences(savedPreferences);
         const selected =
           value.audio.find((track) => track.default) || value.audio[0];
         setAudio(selected?.index);
+        const preferredSubtitleLanguage =
+            savedPreferences.subtitleLanguage === undefined
+              ? "eng"
+              : savedPreferences.subtitleLanguage,
+          preferredSubtitle = preferredSubtitleLanguage
+            ? value.subtitles.find(
+                (track) =>
+                  track.supported &&
+                  (track.language.toLowerCase() ===
+                    preferredSubtitleLanguage.toLowerCase() ||
+                    (preferredSubtitleLanguage === "eng" &&
+                      track.language.toLowerCase() === "en")),
+              )
+            : undefined;
+        setSubtitle(preferredSubtitle?.index);
         if (
           value.video[0]?.codec.toLowerCase() === "hevc" &&
           document
@@ -314,7 +360,11 @@ export default function StreamingPlayer({
     return () => {
       active = false;
     };
-  }, [file, id, identity, route.compat]);
+  }, [file, id, identity, preferenceKey, route.compat]);
+  useEffect(() => {
+    if (video.current)
+      video.current.playbackRate = preferences.playbackRate;
+  }, [preferences.playbackRate, source]);
   useEffect(() => {
     if (qualityMode !== "auto" || !playing || loading) return;
     const timer = setTimeout(() => adaptQuality("up"), 25_000);
@@ -373,6 +423,9 @@ export default function StreamingPlayer({
           if (!transcoded && offset > 0) event.currentTarget.currentTime = offset;
           event.currentTarget.muted = false;
           event.currentTarget.volume = volume;
+          event.currentTarget.playbackRate = preferences.playbackRate;
+          for (const track of event.currentTarget.textTracks)
+            track.mode = "showing";
           void event.currentTarget.play().catch(() => {
             // Browsers may require a tap before audible playback. Keep audio
             // enabled so that the first user-initiated play starts with sound.
@@ -401,6 +454,7 @@ export default function StreamingPlayer({
           if (!info?.duration && !transcoded)
             setNativeDuration(event.currentTarget.duration);
         }}
+        onLoadedData={() => setLoading(false)}
         onCanPlay={() => setLoading(false)}
         onWaiting={() => {
           setLoading(true);
@@ -423,7 +477,7 @@ export default function StreamingPlayer({
           }
         }}
       >
-        {subtitle !== undefined && (
+        {!compatible && subtitle !== undefined && (
           <track
             key={subtitle}
             kind="subtitles"
@@ -593,7 +647,13 @@ export default function StreamingPlayer({
           <div
             className="track-menu"
             role="dialog"
-            aria-label={menu === "audio" ? "Audio languages" : menu === "settings" ? "Playback settings" : "Subtitles"}
+            aria-label={
+              menu === "audio"
+                ? "Audio languages"
+                : menu === "subtitles"
+                  ? "Subtitles"
+                  : "Playback settings"
+            }
           >
             {menu === "audio" ? (
               <>
@@ -615,7 +675,51 @@ export default function StreamingPlayer({
                   </button>
                 ))}
               </>
-            ) : menu === "settings" ? (
+            ) : menu === "subtitles" ? (
+              <>
+                <h3>Subtitles</h3>
+                <button
+                  className={subtitle === undefined ? "active" : ""}
+                  onClick={() => {
+                    setSubtitle(undefined);
+                    updatePreferences({ subtitleLanguage: null });
+                  }}
+                >
+                  Off
+                </button>
+                {info?.subtitles.map((track) => (
+                  <button
+                    key={track.index}
+                    disabled={!track.supported}
+                    className={subtitle === track.index ? "active" : ""}
+                    onClick={() => {
+                      if (!track.supported) return;
+                      setSubtitle(track.index);
+                      updatePreferences({
+                        subtitleLanguage: track.language.toLowerCase(),
+                      });
+                    }}
+                  >
+                    {languageName(track.language, track.title)}
+                    <small>
+                      {track.supported ? "" : "Image subtitles unsupported"}
+                    </small>
+                  </button>
+                ))}
+                <h3>Subtitle size</h3>
+                <div className="subtitle-size">
+                  {(["small", "medium", "large"] as const).map((value) => (
+                    <button
+                      className={subtitleSize === value ? "active" : ""}
+                      key={value}
+                      onClick={() => setSubtitleSize(value)}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
               <>
                 <h3>Video quality</h3>
                 <p className="quality-hint">
@@ -629,7 +733,6 @@ export default function StreamingPlayer({
                       onClick={() => {
                         const nextQuality = value === "auto" ? "480" : value;
                         setQualityMode(value);
-                        setMenu(null);
                         restart(absoluteTime, audio, nextQuality);
                       }}
                     >
@@ -654,40 +757,66 @@ export default function StreamingPlayer({
                     </button>
                   ),
                 )}
-              </>
-            ) : (
-              <>
-                <h3>Subtitles</h3>
-                <button
-                  className={subtitle === undefined ? "active" : ""}
-                  onClick={() => setSubtitle(undefined)}
-                >
-                  Off
-                </button>
-                {info?.subtitles.map((track) => (
-                  <button
-                    key={track.index}
-                    disabled={!track.supported}
-                    className={subtitle === track.index ? "active" : ""}
-                    onClick={() => track.supported && setSubtitle(track.index)}
-                  >
-                    {languageName(track.language, track.title)}
-                    <small>
-                      {track.supported ? "" : "Image subtitles unsupported"}
-                    </small>
-                  </button>
-                ))}
-                <h3>Subtitle size</h3>
-                <div className="subtitle-size">
-                  {(["small", "medium", "large"] as const).map((value) => (
+                <h3>Playback speed</h3>
+                <div className="playback-speeds">
+                  {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
                     <button
-                      className={subtitleSize === value ? "active" : ""}
-                      key={value}
-                      onClick={() => setSubtitleSize(value)}
+                      className={
+                        preferences.playbackRate === rate ? "active" : ""
+                      }
+                      key={rate}
+                      onClick={() => updatePreferences({ playbackRate: rate })}
                     >
-                      {value}
+                      {rate}×
                     </button>
                   ))}
+                </div>
+                <h3>Audio synchronization</h3>
+                <p className="sync-help">
+                  Adjust the voice if it arrives before or after the picture.
+                  This choice is saved for the whole series.
+                </p>
+                <output className="sync-value" aria-live="polite">
+                  {preferences.audioSync === 0
+                    ? "Synchronized"
+                    : `Audio ${preferences.audioSync > 0 ? "later" : "earlier"} by ${Math.abs(preferences.audioSync).toFixed(1)}s`}
+                </output>
+                <div className="sync-controls">
+                  <button
+                    onClick={() => {
+                      const audioSync = Math.max(
+                        -5,
+                        Math.round((preferences.audioSync - 0.1) * 10) / 10,
+                      );
+                      updatePreferences({ audioSync });
+                      setCompatible(true);
+                      restart(absoluteTime);
+                    }}
+                  >
+                    Voice earlier
+                  </button>
+                  <button
+                    onClick={() => {
+                      updatePreferences({ audioSync: 0 });
+                      setCompatible(true);
+                      restart(absoluteTime);
+                    }}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => {
+                      const audioSync = Math.min(
+                        5,
+                        Math.round((preferences.audioSync + 0.1) * 10) / 10,
+                      );
+                      updatePreferences({ audioSync });
+                      setCompatible(true);
+                      restart(absoluteTime);
+                    }}
+                  >
+                    Voice later
+                  </button>
                 </div>
               </>
             )}

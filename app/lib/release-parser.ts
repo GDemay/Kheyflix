@@ -44,16 +44,26 @@ export function parseReleaseTitle(rawTitle: string): ReleaseMetadata {
         : /264|avc/i.test(codecTag) ? "H.264" : "Xvid"
     : undefined;
 
-  const germanSubs = /\b(?:GERMAN|GER|DE|DEUTSCH)[ ._-]*(?:SUBS?|SUBBED)\b|\bVOSTDE\b/i.test(normalized);
-  const englishSubs = /\b(?:ENGLISH|ENG|EN)[ ._-]*(?:SUBS?|SUBBED)\b|\bVOSTEN\b/i.test(normalized);
+  const hasSubtitleTag = (names: string) =>
+    new RegExp(`\\b(?:${names})[ ._-]*(?:SUBS?|SUBBED)\\b|\\bVOST(?:${names})\\b`, "i").test(normalized);
+  const germanSubs = hasSubtitleTag("GERMAN|GER|DE|DEUTSCH");
+  const englishSubs = hasSubtitleTag("ENGLISH|ENG|EN");
+  const frenchSubs = hasSubtitleTag("FRENCH|FRE|FR|TRUEFRENCH");
+  const spanishSubs = hasSubtitleTag("SPANISH|SPA|ES|CASTELLANO");
+  const italianSubs = hasSubtitleTag("ITALIAN|ITA|IT");
+  const portugueseSubs = hasSubtitleTag("PORTUGUESE|POR|PT|PTBR|BR");
   const multiSubs = /\bMULTI[ ._-]*SUBS?\b/i.test(normalized);
   const subtitleLanguages = unique([
     germanSubs ? "German" : undefined,
     englishSubs ? "English" : undefined,
+    frenchSubs ? "French" : undefined,
+    spanishSubs ? "Spanish" : undefined,
+    italianSubs ? "Italian" : undefined,
+    portugueseSubs ? "Portuguese" : undefined,
     multiSubs ? "Multiple" : undefined,
   ]);
   const withoutSubtitleTags = normalized
-    .replace(/\b(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|MULTI)[ ._-]*(?:SUBS?|SUBBED)\b|\bVOST(?:DE|EN)\b/gi, " ");
+    .replace(/\b(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR|MULTI)[ ._-]*(?:SUBS?|SUBBED)\b|\bVOST(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR)\b/gi, " ");
   const audioLanguages = unique([
     /\b(?:GERMAN|DEUTSCH)\b/i.test(withoutSubtitleTags) ? "German" : undefined,
     /\b(?:ENGLISH)\b/i.test(withoutSubtitleTags) ? "English" : undefined,

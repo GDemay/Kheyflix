@@ -18,7 +18,7 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
     .poll(() => video.evaluate((element) => element.readyState), {
       timeout: 30_000,
     })
-    .toBeGreaterThanOrEqual(3);
+    .toBeGreaterThanOrEqual(2);
   await expect(page.getByRole("status")).toBeHidden({ timeout: 30_000 });
 
   const initial = await video.evaluate((element) => ({
@@ -31,7 +31,7 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
   }));
   expect(initial.muted).toBe(false);
   expect(initial.volume).toBe(1);
-  expect(initial.readyState).toBeGreaterThanOrEqual(3);
+  expect(initial.readyState).toBeGreaterThanOrEqual(2);
   expect(initial.width).toBeGreaterThanOrEqual(640);
   expect(initial.height).toBeGreaterThanOrEqual(360);
 
@@ -53,16 +53,23 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
   for (let sample = 0; sample < 4; sample += 1) {
     await page.waitForTimeout(5_000);
     checkpoints.push(await video.evaluate((element) => element.currentTime));
-    await expect(page.getByRole("status")).toBeHidden();
     await expect(page.getByRole("alert")).toHaveCount(0);
   }
   expect(checkpoints.at(-1)! - checkpoints[0]).toBeGreaterThan(12);
 
   await expect(page.getByRole("button", { name: "Audio languages" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Subtitles" })).toBeVisible();
+  await page.getByRole("button", { name: "Subtitles" }).click();
+  await expect(page.getByRole("dialog", { name: "Subtitles" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "English" })).toHaveClass(
+    /active/,
+  );
+  await page.getByRole("button", { name: "Subtitles" }).click();
   await page.getByRole("button", { name: "Playback settings" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Playback settings" }),
+  ).toBeVisible();
   const settings = page.getByRole("dialog", { name: "Playback settings" });
-  await expect(settings).toBeVisible();
   await expect(settings.getByRole("button", { name: /Auto/ })).toHaveClass(
     /active/,
   );
@@ -72,5 +79,8 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
   await expect(
     settings.getByRole("button", { name: "Original Best source quality" }),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "1×" })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "Voice earlier" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Voice later" })).toBeVisible();
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });

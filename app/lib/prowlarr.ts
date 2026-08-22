@@ -37,6 +37,12 @@ export type DiscoveryResult = {
   metadata: ReleaseMetadata;
 };
 
+export type DiscoverySearchOptions = {
+  kind?: "movie" | "series";
+  season?: number;
+  episode?: number;
+};
+
 const configuration = () => {
   const rawUrl = process.env.PROWLARR_URL?.trim();
   const apiKey = process.env.PROWLARR_API_KEY?.trim();
@@ -85,13 +91,19 @@ const stableId = (magnet: string) => {
   return hash.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
 };
 
-export async function searchProwlarr(query: string): Promise<DiscoveryResult[]> {
+export async function searchProwlarr(query: string, options: DiscoverySearchOptions = {}): Promise<DiscoveryResult[]> {
   const term = query.trim().replace(/\s+/g, " ").slice(0, 120);
   if (term.length < 2) return [];
   const { baseUrl, apiKey } = configuration();
   const url = new URL(`${baseUrl}/api/v1/search`);
-  url.searchParams.set("query", term);
+  const season = options.kind === "series" && Number.isInteger(options.season) && Number(options.season) > 0
+    ? Math.min(99, Number(options.season)) : undefined;
+  const episode = season && Number.isInteger(options.episode) && Number(options.episode) > 0
+    ? Math.min(999, Number(options.episode)) : undefined;
+  const episodeSuffix = season ? ` S${String(season).padStart(2, "0")}${episode ? `E${String(episode).padStart(2, "0")}` : ""}` : "";
+  url.searchParams.set("query", `${term}${episodeSuffix}`);
   url.searchParams.set("type", "search");
+  if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
   url.searchParams.set("limit", String(DEFAULT_LIMIT));
   const response = await fetch(url, {
     headers: { "X-Api-Key": apiKey, Accept: "application/json" },
@@ -117,6 +129,11 @@ export async function searchProwlarr(query: string): Promise<DiscoveryResult[]> 
       );
       const title = release.title?.trim();
       if (!magnet || !title) return [];
+      const metadata = parseReleaseTitle(title);
+      const category = categoryFor(release);
+      if (options.kind && category !== options.kind) return [];
+      if (season && metadata.season !== season) return [];
+      if (episode && (metadata.episode === undefined || episode < metadata.episode || episode > (metadata.episodeEnd || metadata.episode))) return [];
       const id = stableId(magnet);
       if (!id || seen.has(id)) return [];
       seen.add(id);
@@ -129,9 +146,9 @@ export async function searchProwlarr(query: string): Promise<DiscoveryResult[]> 
           peers: Math.max(0, Number(release.peers) || 0),
           source: release.indexer || "Kheyflix discovery",
           publishedAt: release.publishDate,
-          category: categoryFor(release),
+          category,
           magnet,
-          metadata: parseReleaseTitle(title),
+          metadata,
         },
       ];
     })
