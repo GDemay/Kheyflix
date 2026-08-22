@@ -24,5 +24,11 @@ if [[ ! -f /config/config.xml ]]; then
   <InstanceName>Kheyflix Prowlarr</InstanceName>
 </Config>
 EOF
+else
+  sed -i \
+    -e 's#<BindAddress>.*</BindAddress>#<BindAddress>*</BindAddress>#' \
+    -e 's#<Port>.*</Port>#<Port>9696</Port>#' \
+    -e 's#<LaunchBrowser>.*</LaunchBrowser>#<LaunchBrowser>False</LaunchBrowser>#' \
+    -e "s#<ApiKey>.*</ApiKey>#<ApiKey>${PROWLARR_API_KEY}</ApiKey>#" \
+    /config/config.xml
 fi
-
