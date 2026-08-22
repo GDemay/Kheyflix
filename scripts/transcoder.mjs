@@ -1,12 +1,17 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
+import {
+  selectedStreamIndex,
+  videoOutputOptions,
+} from "./transcoder-options.mjs";
 
 const port = Number(process.env.KHEYFLIX_TRANSCODER_PORT || 3101),
   appOrigin = process.env.KHEYFLIX_APP_ORIGIN || "http://localhost:3000";
 const ffmpeg = process.env.KHEYFLIX_FFMPEG_PATH || "ffmpeg",
   ffprobe = process.env.KHEYFLIX_FFPROBE_PATH || "ffprobe";
 const jobs = new Map(),
-  probes = new Map();
+  probes = new Map(),
+  probeRequests = new Map();
 const MAX_JOBS = 4,
   TEXT_SUBTITLES = new Set([
     "subrip",
@@ -56,7 +61,9 @@ async function probeMedia(id, file) {
     cached = probes.get(key);
   if (cached && Date.now() - cached.updatedAt < 30 * 60_000)
     return cached.value;
-  const raw = await runJson(ffprobe, [
+  const pending = probeRequests.get(key);
+  if (pending) return pending;
+  const request = runJson(ffprobe, [
     "-v",
     "error",
     "-show_format",
@@ -64,7 +71,18 @@ async function probeMedia(id, file) {
     "-of",
     "json",
     inputFor(id, file),
-  ]);
+  ]).then((raw) => normalizeProbe(raw));
+  probeRequests.set(key, request);
+  try {
+    const value = await request;
+    probes.set(key, { value, updatedAt: Date.now() });
+    return value;
+  } finally {
+    probeRequests.delete(key);
+  }
+}
+
+function normalizeProbe(raw) {
   const streams = Array.isArray(raw.streams) ? raw.streams : [];
   const language = (stream) => stream.tags?.language || "und",
     title = (stream) => stream.tags?.title || "";
@@ -101,7 +119,6 @@ async function probeMedia(id, file) {
         supported: TEXT_SUBTITLES.has(stream.codec_name),
       })),
   };
-  probes.set(key, { value, updatedAt: Date.now() });
   return value;
 }
 
@@ -176,10 +193,9 @@ const server = http.createServer(async (request, response) => {
       existing = jobs.get(token);
     if (existing && !existing.killed) existing.kill("SIGKILL");
     const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
-      audio = Math.max(
-        0,
-        Math.floor(Number(url.searchParams.get("audio") || 1)),
-      );
+      audio = selectedStreamIndex(url.searchParams.get("audio")),
+      media = await probeMedia(match[1], match[2]),
+      videoCodec = media.video[0]?.codec || "";
     const args = ["-hide_banner", "-loglevel", "error"];
     if (start) args.push("-ss", String(start));
     args.push(
@@ -193,8 +209,7 @@ const server = http.createServer(async (request, response) => {
       "0:v:0",
       "-map",
       `0:${audio}?`,
-      "-c:v",
-      "copy",
+      ...videoOutputOptions(videoCodec),
       "-c:a",
       "aac",
       "-b:a",

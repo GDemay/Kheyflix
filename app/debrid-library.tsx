@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Film,
+  Heart,
   Info,
   Play,
   RefreshCw,
@@ -20,6 +21,7 @@ import { EnrichedMetadata } from "./lib/metadata";
 import { parseWatchProgress, PlaybackQueueItem } from "./lib/watch-progress";
 import { Route } from "./routing";
 import { playKheyflixSting } from "./lib/brand-sting";
+import { FAVORITES_KEY, friendsFirst, parseFavorites, toggleFavorite } from "./lib/favorites";
 
 const CATALOG_KEY = "kheyflix:catalog:v3",
   METADATA_PREFIX = "kheyflix:metadata:v2:",
@@ -303,10 +305,14 @@ function CatalogCard({
   item,
   index,
   navigate,
+  favorite,
+  onToggleFavorite,
 }: {
   item: CatalogTitle;
   index: number;
   navigate: (route: Route) => void;
+  favorite: boolean;
+  onToggleFavorite: (id: string) => void;
 }) {
   const card = useRef<HTMLButtonElement>(null);
   const [visible, setVisible] = useState(index < 8);
@@ -329,9 +335,10 @@ function CatalogCard({
   const metadata = useMetadata(item, visible || previewing);
   const trailer = metadata?.trailerUrl;
   return (
+    <div className="library-card">
     <button
       ref={card}
-      className="library-card"
+      className="library-card-main"
       onMouseEnter={() => setPreviewing(true)}
       onMouseLeave={() => setPreviewing(false)}
       onFocus={() => setPreviewing(true)}
@@ -364,16 +371,29 @@ function CatalogCard({
         · Ready to stream
       </small>
     </button>
+    <button
+      className={`favorite-button${favorite ? " active" : ""}`}
+      aria-label={`${favorite ? "Remove" : "Add"} ${displayTitle(item, metadata)} ${favorite ? "from" : "to"} favorites`}
+      aria-pressed={favorite}
+      onClick={() => onToggleFavorite(item.id)}
+    >
+      <Heart fill={favorite ? "currentColor" : "none"} />
+    </button>
+    </div>
   );
 }
 function Rail({
   title,
   items,
   navigate,
+  favorites,
+  onToggleFavorite,
 }: {
   title: string;
   items: CatalogTitle[];
   navigate: (route: Route) => void;
+  favorites: string[];
+  onToggleFavorite: (id: string) => void;
 }) {
   const rail = useRef<HTMLDivElement>(null);
   if (!items.length) return null;
@@ -403,6 +423,8 @@ function Rail({
               item={item}
               index={index}
               navigate={navigate}
+              favorite={favorites.includes(item.id)}
+              onToggleFavorite={onToggleFavorite}
             />
           ))}
         </div>
@@ -441,19 +463,35 @@ export function DebridExperience({
 }) {
   const { titles, loading, refreshing, error, load } = useDebridCatalog();
   const [query, setQuery] = useState("");
+  const [favorites, setFavorites] = useState(() =>
+    typeof localStorage === "undefined"
+      ? []
+      : parseFavorites(localStorage.getItem(FAVORITES_KEY)),
+  );
+  const updateFavorite = (id: string) => {
+    setFavorites((current) => {
+      const next = toggleFavorite(current, id);
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
   const [progress] = useState(() =>
     typeof localStorage === "undefined"
       ? parseWatchProgress(null)
       : parseWatchProgress(localStorage.getItem("kheyflix:progress:v1")),
   );
   const movies = titles.filter((item) => item.category === "movie"),
-    series = titles.filter((item) => item.category === "series"),
+    series = friendsFirst(titles.filter((item) => item.category === "series")),
+    favoriteTitles = favorites
+      .map((id) => titles.find((item) => item.id === id))
+      .filter((item): item is CatalogTitle => Boolean(item)),
     continueWatching = titles.filter((item) =>
       progress.entries.some(
         (entry) => entry.titleId === item.id && !entry.completed,
       ),
     );
   const featured =
+    series.find((item) => /\bfriends\b/i.test(item.title)) ||
     series.find((item) => /mentalist/i.test(item.title)) ||
     series[0] ||
     movies[0];
@@ -537,25 +575,40 @@ export function DebridExperience({
             </span>
           )}
           <Rail
+            title="My Favorites"
+            items={favoriteTitles}
+            navigate={navigate}
+            favorites={favorites}
+            onToggleFavorite={updateFavorite}
+          />
+          <Rail
             title="Continue Watching"
             items={continueWatching}
             navigate={navigate}
+            favorites={favorites}
+            onToggleFavorite={updateFavorite}
           />
           <Rail
             title="Trending on Kheyflix"
             items={titles.slice(0, 30)}
             navigate={navigate}
+            favorites={favorites}
+            onToggleFavorite={updateFavorite}
           />
           <Rail
             title="Binge-worthy Series"
             items={series}
             navigate={navigate}
+            favorites={favorites}
+            onToggleFavorite={updateFavorite}
           />
-          <Rail title="Movies for Tonight" items={movies} navigate={navigate} />
+          <Rail title="Movies for Tonight" items={movies} navigate={navigate} favorites={favorites} onToggleFavorite={updateFavorite} />
           <Rail
             title="More Like This"
             items={[...titles].reverse()}
             navigate={navigate}
+            favorites={favorites}
+            onToggleFavorite={updateFavorite}
           />
         </div>
       </>
@@ -596,6 +649,8 @@ export function DebridExperience({
             item={item}
             index={index}
             navigate={navigate}
+            favorite={favorites.includes(item.id)}
+            onToggleFavorite={updateFavorite}
           />
         ))}
       </div>
@@ -623,6 +678,20 @@ export function DebridDetails({
   const { titles, loading, error } = useDebridCatalog();
   const item = titles.find((title) => title.id === route.id);
   const metadata = useMetadata(item, true);
+  const [favorites, setFavorites] = useState(() =>
+    typeof localStorage === "undefined"
+      ? []
+      : parseFavorites(localStorage.getItem(FAVORITES_KEY)),
+  );
+  const favorite = Boolean(item && favorites.includes(item.id));
+  const updateFavorite = () => {
+    if (!item) return;
+    setFavorites((current) => {
+      const next = toggleFavorite(current, item.id);
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
   const seasons = useMemo(
     () =>
       item ? [...new Set(item.episodes.map((episode) => episode.season))] : [],
@@ -682,6 +751,7 @@ export function DebridDetails({
               <b>K</b> {item.category === "series" ? "SERIES" : "FILM"}
             </p>
             <h2 id="catalog-detail-title">{displayTitle(item, metadata)}</h2>
+            <div className="detail-actions">
             <button
               className="primary-action"
               onClick={() => play(item, first, navigate)}
@@ -689,6 +759,15 @@ export function DebridDetails({
               <Play fill="currentColor" />
               Play
             </button>
+            <button
+              className={`secondary-action${favorite ? " favorite-active" : ""}`}
+              onClick={updateFavorite}
+              aria-pressed={favorite}
+            >
+              <Heart fill={favorite ? "currentColor" : "none"} />
+              {favorite ? "Liked" : "Like"}
+            </button>
+            </div>
           </div>
         </div>
         <div className="detail-content">

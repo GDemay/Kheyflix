@@ -328,7 +328,7 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
   const [playing, setPlaying] = useState(false),
     [time, setTime] = useState(0),
     [duration, setDuration] = useState(0),
-    [volume, setVolume] = useState(0),
+    [volume, setVolume] = useState(1),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
     [controls, setControls] = useState(true);
@@ -415,9 +415,19 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
       <video
         ref={video}
         autoPlay
-        muted
         playsInline
         preload="auto"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.muted = false;
+          event.currentTarget.volume = volume;
+          void event.currentTarget.play().catch(() => {
+            // Preserve audible playback as the default. If autoplay with sound
+            // is blocked, leave the controls ready for a user-initiated play.
+            setLoading(false);
+            setPlaying(false);
+            setControls(true);
+          });
+        }}
         onClick={toggle}
         onPlay={() => {
           setPlaying(true);

@@ -22,6 +22,12 @@ import {
   serializeWatchProgress,
   updateWatchProgress,
 } from "./lib/watch-progress";
+import { needsCompatibleAudio } from "./lib/playback";
+import {
+  COMPATIBLE_STARTUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  startupRecovery,
+} from "./lib/playback-recovery";
 import { Route } from "./routing";
 
 type MediaInfo = {
@@ -103,7 +109,8 @@ export default function StreamingPlayer({
     video = useRef<HTMLVideoElement>(null),
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    lastSaved = useRef(0);
+    lastSaved = useRef(0),
+    compatibleRetries = useRef(0);
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
         return JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
@@ -137,7 +144,7 @@ export default function StreamingPlayer({
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
     [nativeDuration, setNativeDuration] = useState(0),
-    [volume, setVolume] = useState(0),
+    [volume, setVolume] = useState(1),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
     [controls, setControls] = useState(true),
@@ -237,6 +244,31 @@ export default function StreamingPlayer({
     return () => clearTimeout(timer);
   }, []);
   useEffect(() => {
+    if (!loading || error) return;
+    const timer = setTimeout(
+      () => {
+        const recovery = startupRecovery(
+          compatible,
+          compatibleRetries.current,
+        );
+        if (recovery === "fallback") {
+          setCompatible(true);
+          setSession(crypto.randomUUID());
+        } else if (recovery === "retry") {
+          compatibleRetries.current += 1;
+          restart(absoluteTime);
+        } else {
+          setLoading(false);
+          setError(true);
+        }
+      },
+      compatible
+        ? COMPATIBLE_STARTUP_TIMEOUT_MS
+        : NATIVE_STARTUP_TIMEOUT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [absoluteTime, compatible, error, loading, restart, session]);
+  useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
   }, [persist, stop]);
@@ -250,12 +282,7 @@ export default function StreamingPlayer({
         const selected =
           value.audio.find((track) => track.default) || value.audio[0];
         setAudio(selected?.index);
-        if (
-          value.audio.some(
-            (track) => !["aac", "mp3", "opus", "vorbis"].includes(track.codec),
-          )
-        )
-          setCompatible(true);
+        if (needsCompatibleAudio(selected?.codec)) setCompatible(true);
         const saved = resumePosition(
           findWatchProgress(
             parseWatchProgress(localStorage.getItem(PROGRESS_KEY)),
@@ -319,12 +346,18 @@ export default function StreamingPlayer({
         ref={video}
         src={source}
         autoPlay
-        muted
         playsInline
         preload="auto"
         onLoadedMetadata={(event) => {
           event.currentTarget.muted = false;
           event.currentTarget.volume = volume;
+          void event.currentTarget.play().catch(() => {
+            // Browsers may require a tap before audible playback. Keep audio
+            // enabled so that the first user-initiated play starts with sound.
+            setLoading(false);
+            setPlaying(false);
+            setControls(true);
+          });
         }}
         onClick={toggle}
         onPlay={() => {
@@ -347,9 +380,15 @@ export default function StreamingPlayer({
           if (!info?.duration && !compatible)
             setNativeDuration(event.currentTarget.duration);
         }}
-        onCanPlay={() => setLoading(false)}
+        onCanPlay={() => {
+          compatibleRetries.current = 0;
+          setLoading(false);
+        }}
         onWaiting={() => setLoading(true)}
-        onPlaying={() => setLoading(false)}
+        onPlaying={() => {
+          compatibleRetries.current = 0;
+          setLoading(false);
+        }}
         onEnded={() => {
           persist(duration);
           setPlaying(false);
@@ -378,7 +417,7 @@ export default function StreamingPlayer({
           <strong>KHEYFLIX</strong>
         </div>
       )}
-      {loading && !error && !intro && (
+      {loading && !error && (
         <div className="buffering" role="status">
           <span />
           <p>Preparing {compatible ? "compatible " : ""}playback…</p>
