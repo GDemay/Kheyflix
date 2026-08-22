@@ -195,7 +195,8 @@ const server = http.createServer(async (request, response) => {
     const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
       audio = selectedStreamIndex(url.searchParams.get("audio")),
       media = await probeMedia(match[1], match[2]),
-      videoCodec = media.video[0]?.codec || "";
+      videoCodec = media.video[0]?.codec || "",
+      videoHeight = media.video[0]?.height || 0;
     const args = ["-hide_banner", "-loglevel", "error"];
     if (start) args.push("-ss", String(start));
     args.push(
@@ -209,7 +210,7 @@ const server = http.createServer(async (request, response) => {
       "0:v:0",
       "-map",
       `0:${audio}?`,
-      ...videoOutputOptions(videoCodec),
+      ...videoOutputOptions(videoCodec, videoHeight),
       "-c:a",
       "aac",
       "-b:a",

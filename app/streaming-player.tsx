@@ -22,7 +22,7 @@ import {
   serializeWatchProgress,
   updateWatchProgress,
 } from "./lib/watch-progress";
-import { needsCompatibleAudio } from "./lib/playback";
+import { needsCompatiblePlayback } from "./lib/playback";
 import {
   COMPATIBLE_STARTUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -32,6 +32,7 @@ import { Route } from "./routing";
 
 type MediaInfo = {
   duration: number;
+  format: string;
   video: Array<{ index: number; codec: string; width: number; height: number }>;
   audio: Array<{
     index: number;
@@ -207,6 +208,8 @@ export default function StreamingPlayer({
     },
     [audio, duration, persist, stop],
   );
+  const restartRef = useRef(restart),
+    absoluteTimeRef = useRef(absoluteTime);
   const seek = useCallback(
     (at: number) => {
       const target = Math.max(0, Math.min(duration || at, at));
@@ -244,6 +247,10 @@ export default function StreamingPlayer({
     return () => clearTimeout(timer);
   }, []);
   useEffect(() => {
+    restartRef.current = restart;
+    absoluteTimeRef.current = absoluteTime;
+  }, [absoluteTime, restart]);
+  useEffect(() => {
     if (!loading || error) return;
     const timer = setTimeout(
       () => {
@@ -256,7 +263,7 @@ export default function StreamingPlayer({
           setSession(crypto.randomUUID());
         } else if (recovery === "retry") {
           compatibleRetries.current += 1;
-          restart(absoluteTime);
+          restartRef.current(absoluteTimeRef.current);
         } else {
           setLoading(false);
           setError(true);
@@ -267,7 +274,7 @@ export default function StreamingPlayer({
         : NATIVE_STARTUP_TIMEOUT_MS,
     );
     return () => clearTimeout(timer);
-  }, [absoluteTime, compatible, error, loading, restart, session]);
+  }, [compatible, error, loading, session]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
@@ -282,7 +289,8 @@ export default function StreamingPlayer({
         const selected =
           value.audio.find((track) => track.default) || value.audio[0];
         setAudio(selected?.index);
-        if (needsCompatibleAudio(selected?.codec)) setCompatible(true);
+        if (needsCompatiblePlayback(value.format, selected?.codec))
+          setCompatible(true);
         const saved = resumePosition(
           findWatchProgress(
             parseWatchProgress(localStorage.getItem(PROGRESS_KEY)),
@@ -394,6 +402,11 @@ export default function StreamingPlayer({
           setPlaying(false);
         }}
         onError={() => {
+          if (!compatible) {
+            setCompatible(true);
+            setSession(crypto.randomUUID());
+            return;
+          }
           setLoading(false);
           setError(true);
         }}

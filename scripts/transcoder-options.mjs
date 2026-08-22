@@ -1,15 +1,18 @@
 const BROWSER_SAFE_VIDEO_CODECS = new Set(["h264"]);
 
-export function videoOutputOptions(codec = "") {
+export function videoOutputOptions(codec = "", height = 0) {
   if (BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];
 
   return [
+    ...(height > 720 ? ["-vf", "scale=-2:720"] : []),
     "-c:v",
     "libx264",
     "-preset",
-    "veryfast",
+    "ultrafast",
+    "-tune",
+    "zerolatency",
     "-crf",
-    "23",
+    "25",
     "-pix_fmt",
     "yuv420p",
   ];

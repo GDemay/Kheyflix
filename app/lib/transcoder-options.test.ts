@@ -17,6 +17,12 @@ describe("compatible playback transcoder options", () => {
     },
   );
 
+  it("bounds expensive 4K compatibility transcodes to a streamable size", () => {
+    expect(videoOutputOptions("hevc", 1600)).toEqual(
+      expect.arrayContaining(["-vf", "scale=-2:720", "-preset", "ultrafast"]),
+    );
+  });
+
   it("preserves audio stream zero and safely defaults invalid selections", () => {
     expect(selectedStreamIndex("0")).toBe(0);
     expect(selectedStreamIndex("3.8")).toBe(3);
