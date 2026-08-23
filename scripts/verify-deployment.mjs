@@ -21,6 +21,25 @@ async function json(path) {
   return response.json();
 }
 
+const delay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function playableCatalog(attempts = 12) {
+  let lastCatalog;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    lastCatalog = await json("/api/debrid/magnets");
+    const ready =
+      lastCatalog.magnets?.filter((item) => item.statusCode === 4) || [];
+    const videos = ready.reduce(
+      (total, item) => total + (item.videoFiles?.length || 0),
+      0,
+    );
+    if (ready.length && videos) return { catalog: lastCatalog, ready, videos };
+    if (attempt < attempts) await delay(5_000);
+  }
+  throw new Error("The deployed catalog has no playable video files");
+}
+
 try {
   const root = await fetch(baseUrl, { signal: AbortSignal.timeout(15_000) });
   if (!root.ok) throw new Error(`/ returned HTTP ${root.status}`);
@@ -34,14 +53,7 @@ try {
   if (!health.dependencies?.discovery)
     throw new Error("Prowlarr discovery is not configured");
 
-  const catalog = await json("/api/debrid/magnets");
-  const ready = catalog.magnets?.filter((item) => item.statusCode === 4) || [];
-  const videos = ready.reduce(
-    (total, item) => total + (item.videoFiles?.length || 0),
-    0,
-  );
-  if (!ready.length || !videos)
-    throw new Error("The deployed catalog has no playable video files");
+  const { catalog, ready, videos } = await playableCatalog();
 
   const discovery = await json("/api/discovery/search?q=Shrek");
   if (!Array.isArray(discovery.results))

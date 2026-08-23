@@ -57,3 +57,11 @@ jobs:
       - run: npm run verify:production
       - run: npx playwright install --with-deps chromium
       - run: npm run test:playback:production
+      - name: Upload playback diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-playback-diagnostics-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
