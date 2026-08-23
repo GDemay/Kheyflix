@@ -44,6 +44,10 @@ import {
   serializePlaybackPreferences,
 } from "./lib/playback-preferences";
 import { Route } from "./routing";
+import {
+  classifyProviderPreflightFailure,
+  ProviderPreflightHttpError,
+} from "./lib/provider-preflight";
 import { PlaybackRequestGate } from "./lib/player-navigation";
 
 type MediaInfo = {
@@ -418,18 +422,27 @@ export default function StreamingPlayer({
     })
       .then((response) => {
         if (!response.ok)
-          throw new Error(`Media provider returned HTTP ${response.status}.`);
+          throw new ProviderPreflightHttpError(response.status);
         setProviderReady(true);
       })
       .catch((reason) => {
-        if (controller.signal.aborted) return;
+        const failure = classifyProviderPreflightFailure(
+          reason,
+          controller.signal.aborted,
+        );
+        if (failure.action === "ignore") return;
+        if (failure.action === "continue") {
+          console.warn("[playback] provider preflight unavailable; continuing", {
+            id,
+            file,
+            reason,
+          });
+          setProviderReady(true);
+          return;
+        }
         console.error("[playback] provider preflight failed", { id, file, reason });
         setLoading(false);
-        setErrorMessage(
-          reason instanceof Error
-            ? reason.message
-            : "The media provider is unavailable.",
-        );
+        setErrorMessage(failure.message);
         setError(true);
       });
     return () => controller.abort();
