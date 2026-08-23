@@ -130,7 +130,7 @@ const SHARDS = Array.from({ length: 48 }, (_, index) => {
   return { points: points.join(" "), order: (index * 11) % 48 };
 });
 
-function ShardPortalLoader({
+export function ShardPortalLoader({
   active,
   compatible,
 }: {

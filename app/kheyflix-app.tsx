@@ -27,7 +27,7 @@ import ProfilePage from "./profile-page";
 import { DebridDetails, DebridExperience } from "./debrid-library";
 import DiscoveryPage from "./discovery-page";
 import { parseRoute, Route, routePath } from "./routing";
-import StreamingPlayer from "./streaming-player";
+import StreamingPlayer, { ShardPortalLoader } from "./streaming-player";
 import { normalizeSearchQuery } from "./catalog-ux";
 import { playbackReturnRoute } from "./lib/player-navigation";
 
@@ -459,11 +459,8 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
           type={item.source.type}
         />
       </video>
-      {loading && !error && (
-        <div className="buffering" role="status">
-          <span />
-          <p>Loading your film…</p>
-        </div>
+      {!error && (
+        <ShardPortalLoader active={loading} compatible={false} />
       )}
       {error && (
         <div className="playback-error" role="alert">
