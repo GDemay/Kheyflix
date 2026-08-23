@@ -1,8 +1,9 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
-	objectVersion = 77;
+	classes = {
+	};
+	objectVersion = 71;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -18,8 +19,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		C10000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = D10000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = E10000000000000000000001; remoteInfo = Kheyflix; };
-		C10000000000000000000002 = {isa = PBXContainerItemProxy; containerPortal = D10000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = E10000000000000000000001; remoteInfo = Kheyflix; };
+		C10000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E10000000000000000000001;
+			remoteInfo = Kheyflix;
+		};
+		C10000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E10000000000000000000001;
+			remoteInfo = Kheyflix;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -39,62 +52,425 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		F10000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		F10000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		F10000000000000000000003 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F10000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F10000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		G10000000000000000000001 = {isa = PBXGroup; children = (G10000000000000000000002 /* Kheyflix */, G10000000000000000000003 /* KheyflixTests */, G10000000000000000000004 /* KheyflixUITests */, G10000000000000000000005 /* Products */); sourceTree = "<group>"; };
-		G10000000000000000000002 /* Kheyflix */ = {isa = PBXGroup; path = Kheyflix; sourceTree = "<group>"; children = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000003, B10000000000000000000004, B10000000000000000000005, B10000000000000000000006, B10000000000000000000007, B1000000000000000000000A); };
-		G10000000000000000000003 /* KheyflixTests */ = {isa = PBXGroup; path = KheyflixTests; sourceTree = "<group>"; children = (B10000000000000000000008); };
-		G10000000000000000000004 /* KheyflixUITests */ = {isa = PBXGroup; path = KheyflixUITests; sourceTree = "<group>"; children = (B10000000000000000000009); };
-		G10000000000000000000005 /* Products */ = {isa = PBXGroup; name = Products; sourceTree = "<group>"; children = (B1000000000000000000000B, B1000000000000000000000C, B1000000000000000000000D); };
+		G10000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				G10000000000000000000002 /* Kheyflix */,
+				G10000000000000000000003 /* KheyflixTests */,
+				G10000000000000000000004 /* KheyflixUITests */,
+				G10000000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		G10000000000000000000002 /* Kheyflix */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* KheyflixApp.swift */,
+				B10000000000000000000002 /* RootView.swift */,
+				B10000000000000000000003 /* KheyflixWebView.swift */,
+				B10000000000000000000004 /* WebViewModel.swift */,
+				B10000000000000000000005 /* AppConfiguration.swift */,
+				B10000000000000000000006 /* Assets.xcassets */,
+				B10000000000000000000007 /* UITestFixture.html */,
+				B1000000000000000000000A /* Info.plist */,
+			);
+			path = Kheyflix;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000003 /* KheyflixTests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000008 /* AppConfigurationTests.swift */,
+			);
+			path = KheyflixTests;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000004 /* KheyflixUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000009 /* KheyflixUITests.swift */,
+			);
+			path = KheyflixUITests;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000B /* Kheyflix.app */,
+				B1000000000000000000000C /* KheyflixTests.xctest */,
+				B1000000000000000000000D /* KheyflixUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		E10000000000000000000001 /* Kheyflix */ = {isa = PBXNativeTarget; buildConfigurationList = H10000000000000000000002; buildPhases = (I10000000000000000000001, F10000000000000000000001, J10000000000000000000001); buildRules = (); dependencies = (); name = Kheyflix; productName = Kheyflix; productReference = B1000000000000000000000B; productType = "com.apple.product-type.application"; };
-		E10000000000000000000002 /* KheyflixTests */ = {isa = PBXNativeTarget; buildConfigurationList = H10000000000000000000003; buildPhases = (I10000000000000000000002, F10000000000000000000002, J10000000000000000000002); buildRules = (); dependencies = (K100000000000000000000001); name = KheyflixTests; productName = KheyflixTests; productReference = B1000000000000000000000C; productType = "com.apple.product-type.bundle.unit-test"; };
-		E10000000000000000000003 /* KheyflixUITests */ = {isa = PBXNativeTarget; buildConfigurationList = H10000000000000000000004; buildPhases = (I10000000000000000000003, F10000000000000000000003, J10000000000000000000003); buildRules = (); dependencies = (K100000000000000000000002); name = KheyflixUITests; productName = KheyflixUITests; productReference = B1000000000000000000000D; productType = "com.apple.product-type.bundle.ui-testing"; };
+		E10000000000000000000001 /* Kheyflix */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H10000000000000000000002 /* Build configuration list for PBXNativeTarget "Kheyflix" */;
+			buildPhases = (
+				I10000000000000000000001 /* Sources */,
+				F10000000000000000000001 /* Frameworks */,
+				J10000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Kheyflix;
+			productName = Kheyflix;
+			productReference = B1000000000000000000000B /* Kheyflix.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E10000000000000000000002 /* KheyflixTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H10000000000000000000003 /* Build configuration list for PBXNativeTarget "KheyflixTests" */;
+			buildPhases = (
+				I10000000000000000000002 /* Sources */,
+				F10000000000000000000002 /* Frameworks */,
+				J10000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				K100000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = KheyflixTests;
+			productName = KheyflixTests;
+			productReference = B1000000000000000000000C /* KheyflixTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E10000000000000000000003 /* KheyflixUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H10000000000000000000004 /* Build configuration list for PBXNativeTarget "KheyflixUITests" */;
+			buildPhases = (
+				I10000000000000000000003 /* Sources */,
+				F10000000000000000000003 /* Frameworks */,
+				J10000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				K100000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = KheyflixUITests;
+			productName = KheyflixUITests;
+			productReference = B1000000000000000000000D /* KheyflixUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		D10000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2650; LastUpgradeCheck = 2650; TargetAttributes = {E10000000000000000000001 = {CreatedOnToolsVersion = 26.5; }; E10000000000000000000002 = {CreatedOnToolsVersion = 26.5; TestTargetID = E10000000000000000000001; }; E10000000000000000000003 = {CreatedOnToolsVersion = 26.5; TestTargetID = E10000000000000000000001; };};}; buildConfigurationList = H10000000000000000000001; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = G10000000000000000000001; productRefGroup = G10000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (E10000000000000000000001, E10000000000000000000002, E10000000000000000000003); };
+		D10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					E10000000000000000000001 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					E10000000000000000000002 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = E10000000000000000000001;
+					};
+					E10000000000000000000003 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = E10000000000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = H10000000000000000000001 /* Build configuration list for PBXProject "Kheyflix" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = G10000000000000000000001;
+			productRefGroup = G10000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E10000000000000000000001 /* Kheyflix */,
+				E10000000000000000000002 /* KheyflixTests */,
+				E10000000000000000000003 /* KheyflixUITests */,
+			);
+		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		J10000000000000000000001 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000006, A10000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
-		J10000000000000000000002 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		J10000000000000000000003 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		J10000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000006 /* Assets.xcassets in Resources */,
+				A10000000000000000000007 /* UITestFixture.html in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		J10000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		J10000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		I10000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005); runOnlyForDeploymentPostprocessing = 0; };
-		I10000000000000000000002 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000008); runOnlyForDeploymentPostprocessing = 0; };
-		I10000000000000000000003 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000009); runOnlyForDeploymentPostprocessing = 0; };
+		I10000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* KheyflixApp.swift in Sources */,
+				A10000000000000000000002 /* RootView.swift in Sources */,
+				A10000000000000000000003 /* KheyflixWebView.swift in Sources */,
+				A10000000000000000000004 /* WebViewModel.swift in Sources */,
+				A10000000000000000000005 /* AppConfiguration.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		I10000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000008 /* AppConfigurationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		I10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000009 /* KheyflixUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		K100000000000000000000001 = {isa = PBXTargetDependency; target = E10000000000000000000001; targetProxy = C10000000000000000000001; };
-		K100000000000000000000002 = {isa = PBXTargetDependency; target = E10000000000000000000001; targetProxy = C10000000000000000000002; };
+		K100000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E10000000000000000000001 /* Kheyflix */;
+			targetProxy = C10000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		K100000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E10000000000000000000001 /* Kheyflix */;
+			targetProxy = C10000000000000000000002 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		L100000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
-		L100000000000000000000002 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; VALIDATE_PRODUCT = YES; }; name = Release; };
-		L100000000000000000000003 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 6; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Kheyflix/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; KHEYFLIX_BASE_URL = "https://kheyflix-production.up.railway.app"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
-		L100000000000000000000004 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 6; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Kheyflix/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; KHEYFLIX_BASE_URL = "https://kheyflix-production.up.railway.app"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
-		L100000000000000000000005 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kheyflix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kheyflix"; }; name = Debug; };
-		L100000000000000000000006 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kheyflix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kheyflix"; }; name = Release; };
-		L100000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = Kheyflix; }; name = Debug; };
-		L100000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = Kheyflix; }; name = Release; };
+		L100000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		L100000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		L100000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 6;
+				DEVELOPMENT_TEAM = GB87Z9SKC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Kheyflix/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				KHEYFLIX_BASE_URL = "https://kheyflix-production.up.railway.app";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		L100000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 6;
+				DEVELOPMENT_TEAM = GB87Z9SKC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Kheyflix/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				KHEYFLIX_BASE_URL = "https://kheyflix-production.up.railway.app";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		L100000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kheyflix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kheyflix";
+			};
+			name = Debug;
+		};
+		L100000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kheyflix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kheyflix";
+			};
+			name = Release;
+		};
+		L100000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kheyflix;
+			};
+			name = Debug;
+		};
+		L100000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gdemay.kheyflix.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kheyflix;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		H10000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (L100000000000000000000001, L100000000000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		H10000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (L100000000000000000000003, L100000000000000000000004); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		H10000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (L100000000000000000000005, L100000000000000000000006); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		H10000000000000000000004 = {isa = XCConfigurationList; buildConfigurations = (L100000000000000000000007, L100000000000000000000008); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		H10000000000000000000001 /* Build configuration list for PBXProject "Kheyflix" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L100000000000000000000001 /* Debug */,
+				L100000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		H10000000000000000000002 /* Build configuration list for PBXNativeTarget "Kheyflix" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L100000000000000000000003 /* Debug */,
+				L100000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		H10000000000000000000003 /* Build configuration list for PBXNativeTarget "KheyflixTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L100000000000000000000005 /* Debug */,
+				L100000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		H10000000000000000000004 /* Build configuration list for PBXNativeTarget "KheyflixUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L100000000000000000000007 /* Debug */,
+				L100000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 	};
 	rootObject = D10000000000000000000001 /* Project object */;
