@@ -155,6 +155,7 @@ export default function StreamingPlayer({
     [iosPlayback] = useState(() =>
       typeof navigator !== "undefined" &&
       requiresMutedAutoplay(navigator.userAgent) &&
+      /Apple/i.test(navigator.vendor) &&
       Boolean(
         document
           .createElement("video")
