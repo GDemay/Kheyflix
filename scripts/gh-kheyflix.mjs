@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  EXPECTED_REPOSITORY,
+  protectedArguments,
+  protectedEnvironment,
+} from "./gh-kheyflix-policy.mjs";
 
 const EXPECTED_LOGIN = "GDemay";
-const EXPECTED_REPOSITORY = "GDemay/Kheyflix";
-const gh = process.env.KHEYFLIX_GH_BIN || "gh";
+const gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].find(
+  existsSync,
+);
 const configDir =
   process.env.KHEYFLIX_GH_CONFIG_DIR || join(homedir(), ".config", "gh-kheyflix");
 const args = process.argv.slice(2);
-const env = { ...process.env, GH_CONFIG_DIR: configDir, GH_REPO: EXPECTED_REPOSITORY };
-
-// Environment tokens override gh's stored profile. They must never be able to
-// silently replace the repository-isolated GDemay authentication.
-delete env.GH_TOKEN;
-delete env.GITHUB_TOKEN;
+const env = protectedEnvironment(process.env, configDir);
 
 const fail = (message) => {
   console.error(`Kheyflix GitHub operation blocked: ${message}`);
@@ -23,7 +25,7 @@ const fail = (message) => {
 };
 
 const run = (commandArgs, options = {}) =>
-  spawnSync(gh, commandArgs, {
+  spawnSync(gh || "gh-not-installed", commandArgs, {
     env,
     encoding: "utf8",
     ...options,
@@ -36,6 +38,15 @@ if (args[0] === "--setup") {
   );
   if (setup.error) fail(`could not launch GitHub CLI (${setup.error.message}).`);
   if (setup.status !== 0) process.exit(setup.status ?? 1);
+}
+
+let forwardedArgs;
+if (args[0] !== "--setup") {
+  try {
+    forwardedArgs = protectedArguments(args);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "invalid GitHub CLI command.");
+  }
 }
 
 const identity = run(["api", "user", "--jq", ".login"]);
@@ -52,23 +63,13 @@ const remote = spawnSync("git", ["remote", "get-url", "origin"], {
   encoding: "utf8",
 });
 if (remote.status !== 0) fail("the authoritative origin remote is unavailable.");
-if (!/^git@github\.com:GDemay\/Kheyflix\.git$|^https:\/\/github\.com\/GDemay\/Kheyflix(?:\.git)?$/.test(remote.stdout.trim()))
+if (remote.stdout.trim() !== "git@github.com:GDemay/Kheyflix.git")
   fail(`origin is not ${EXPECTED_REPOSITORY}.`);
-
-for (let index = 0; index < args.length; index += 1) {
-  const value = args[index];
-  if ((value === "--repo" || value === "-R") && args[index + 1] !== EXPECTED_REPOSITORY)
-    fail(`explicit repository must be ${EXPECTED_REPOSITORY}.`);
-  if ((value.startsWith("--repo=") || value.startsWith("-R=")) && value.split("=", 2)[1] !== EXPECTED_REPOSITORY)
-    fail(`explicit repository must be ${EXPECTED_REPOSITORY}.`);
-}
 
 if (args[0] === "--setup") {
   console.log(`Kheyflix GitHub profile ready: ${EXPECTED_LOGIN} -> ${EXPECTED_REPOSITORY}.`);
   process.exit(0);
 }
-if (!args.length) fail("no GitHub CLI command was provided.");
-
-const result = run(args, { stdio: "inherit" });
+const result = run(forwardedArgs, { stdio: "inherit" });
 if (result.error) fail(`could not launch GitHub CLI (${result.error.message}).`);
 process.exit(result.status ?? 1);

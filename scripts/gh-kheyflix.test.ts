@@ -1,56 +1,38 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-
-const project = process.cwd();
-
-function fakeGh(login: string) {
-  const directory = mkdtempSync(join(tmpdir(), "kheyflix-gh-test-"));
-  const executable = join(directory, "gh");
-  writeFileSync(
-    executable,
-    `#!/bin/sh\nif [ "$1 $2 $3 $4" = "api user --jq .login" ]; then printf '%s\\n' '${login}'; exit 0; fi\nprintf '%s\\n' "$GH_CONFIG_DIR|$GH_REPO|$*"\n`,
-  );
-  chmodSync(executable, 0o700);
-  return { directory, executable };
-}
-
-function invoke(login: string, args: string[], extraEnv: Record<string, string> = {}) {
-  const fake = fakeGh(login);
-  return spawnSync(process.execPath, ["scripts/gh-kheyflix.mjs", ...args], {
-    cwd: project,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      KHEYFLIX_GH_BIN: fake.executable,
-      KHEYFLIX_GH_CONFIG_DIR: fake.directory,
-      ...extraEnv,
-    },
-  });
-}
+import {
+  protectedArguments,
+  protectedEnvironment,
+} from "./gh-kheyflix-policy.mjs";
 
 describe("Kheyflix GitHub CLI boundary", () => {
-  it("blocks the globally active guillaume-tesla identity", () => {
-    const result = invoke("guillaume-tesla", ["pr", "list"]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("not GDemay");
+  it("removes ambient tokens and pins the isolated profile", () => {
+    const env = protectedEnvironment(
+      { GH_TOKEN: "wrong", GITHUB_TOKEN: "wrong-too", PATH: "/bin" },
+      "/isolated/kheyflix",
+    );
+    expect(env).not.toHaveProperty("GH_TOKEN");
+    expect(env).not.toHaveProperty("GITHUB_TOKEN");
+    expect(env.GH_CONFIG_DIR).toBe("/isolated/kheyflix");
+    expect(env.GH_REPO).toBe("GDemay/Kheyflix");
   });
 
-  it("pins GDemay operations to the canonical repository and isolated profile", () => {
-    const result = invoke("GDemay", ["pr", "list"], {
-      GH_TOKEN: "wrong-global-token",
-      GITHUB_TOKEN: "another-wrong-global-token",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GDemay/Kheyflix|pr list");
-    expect(result.stdout).toContain("kheyflix-gh-test-");
+  it("pins allowlisted delivery commands to the canonical repository", () => {
+    expect(protectedArguments(["pr", "checks", "27"])).toEqual([
+      "pr",
+      "checks",
+      "27",
+      "--repo",
+      "GDemay/Kheyflix",
+    ]);
   });
 
-  it("rejects an explicit repository override", () => {
-    const result = invoke("GDemay", ["pr", "create", "--repo", "guillaume-tesla/Kheyflix"]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("explicit repository must be GDemay/Kheyflix");
+  it.each([
+    ["raw API", ["api", "repos/octocat/Hello-World"]],
+    ["positional repo", ["repo", "view", "octocat/Hello-World"]],
+    ["long repo", ["pr", "list", "--repo", "octocat/Hello-World"]],
+    ["long equals repo", ["pr", "list", "--repo=octocat/Hello-World"]],
+    ["compact repo", ["pr", "list", "-Roctocat/Hello-World"]],
+  ])("rejects the %s escape", (_label, args) => {
+    expect(() => protectedArguments(args)).toThrow();
   });
 });
