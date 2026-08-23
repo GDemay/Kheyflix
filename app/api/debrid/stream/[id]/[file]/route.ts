@@ -11,7 +11,11 @@ const clientIp = (request:Request) => {
 async function handle(request:Request,{params}:{params:Promise<{id:string;file:string}>}) {
   try {
     const {id,file}=await params;
-    const relay=process.env.KHEYFLIX_STREAM_MODE==='relay';
+    // Relay by default so one account is never unlocked against every
+    // viewer's changing phone, laptop, VPN, or mobile-network IP address.
+    // Direct mode is an explicit opt-in for deployments with provider-safe
+    // network controls.
+    const relay=process.env.KHEYFLIX_STREAM_MODE!=='direct';
     const media=await resolveVideo(Number(id),Number(file),relay?undefined:clientIp(request));
     if(new URL(media.url).protocol!=='https:')throw new AllDebridError('The media service returned an unsafe stream URL.','STREAM_URL_UNSAFE',502);
     if(!relay)return new Response(null,{status:307,headers:{Location:media.url,'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Kheyflix-Stream':'direct'}});

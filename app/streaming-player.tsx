@@ -213,6 +213,8 @@ export default function StreamingPlayer({
     ),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
+    [errorMessage, setErrorMessage] = useState(""),
+    [providerReady, setProviderReady] = useState(false),
     [controls, setControls] = useState(true),
     [intro, setIntro] = useState(true);
   const transcoded = compatible || rendition !== "original",
@@ -225,7 +227,7 @@ export default function StreamingPlayer({
     duration = info?.duration || nativeDuration,
     absoluteTime = transcoded ? playbackOffset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
-  const source = mediaReady || (iosPlayback && bootstrap)
+  const source = providerReady && (mediaReady || (iosPlayback && bootstrap))
     ? iosPlayback && transcoded
       ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${bootstrap ? "" : `&sync=${preferences.audioSync}`}`
       : transcoded
@@ -292,6 +294,7 @@ export default function StreamingPlayer({
       stop();
       setLoading(true);
       setError(false);
+      setErrorMessage("");
       setLocalTime(0);
       setOffset(target);
       setAudio(nextAudio);
@@ -406,6 +409,31 @@ export default function StreamingPlayer({
       stop(token);
     };
   }, [activeSession, file, id, stop, transcoded]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`/api/debrid/stream/${id}/${file}`, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok)
+          throw new Error(`Media provider returned HTTP ${response.status}.`);
+        setProviderReady(true);
+      })
+      .catch((reason) => {
+        if (controller.signal.aborted) return;
+        console.error("[playback] provider preflight failed", { id, file, reason });
+        setLoading(false);
+        setErrorMessage(
+          reason instanceof Error
+            ? reason.message
+            : "The media provider is unavailable.",
+        );
+        setError(true);
+      });
+    return () => controller.abort();
+  }, [file, id]);
   useEffect(() => {
     const request = mediaRequests.current.begin();
     const controller = new AbortController();
@@ -744,7 +772,10 @@ export default function StreamingPlayer({
       {error && (
         <div className="playback-error" role="alert">
           <h1>We couldn’t start playback</h1>
-          <p>The stream did not become playable. Your place has been saved.</p>
+          <p>
+            {errorMessage ||
+              "The stream did not become playable. Your place has been saved."}
+          </p>
           <div>
             <button onClick={() => restart(absoluteTime)}>
               <RotateCcw />
