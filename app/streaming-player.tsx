@@ -122,6 +122,130 @@ function IconButton({
   );
 }
 
+const SHARDS = Array.from({ length: 48 }, (_, index) => {
+  const column = index % 6;
+  const row = Math.floor(index / 6);
+  const x = 200 + column * 46;
+  const y = 75 + row * 48;
+  const points =
+    index % 2
+      ? [x, y, x + 42, y + 7, x + 31, y + 43, x + 5, y + 32]
+      : [x + 8, y, x + 42, y + 18, x + 18, y + 44, x, y + 17];
+  return { points: points.join(" "), order: (index * 11) % 48 };
+});
+
+function ShardPortalLoader({
+  active,
+  compatible,
+}: {
+  active: boolean;
+  compatible: boolean;
+}) {
+  const [progress, setProgress] = useState(0);
+  const [visible, setVisible] = useState(true);
+  const started = useRef(0);
+  const progressRef = useRef(0);
+
+  useEffect(() => {
+    let frame = 0;
+    let finishStarted = 0;
+    if (active) {
+      started.current = 0;
+      progressRef.current = 0;
+    }
+    const update = (now: number) => {
+      if (active) {
+        if (!started.current) {
+          started.current = now;
+          setProgress(0);
+          setVisible(true);
+        }
+        const elapsed = now - started.current;
+        const next = Math.min(0.94, elapsed / (elapsed + 700));
+        progressRef.current = Math.max(progressRef.current, next);
+        setProgress(progressRef.current);
+      } else if (visible) {
+        if (!finishStarted) finishStarted = now;
+        const completion = Math.min(1, (now - finishStarted) / 420);
+        const next =
+          progressRef.current + (1 - progressRef.current) * completion;
+        setProgress(next);
+        if (completion === 1 && now - finishStarted > 980) setVisible(false);
+      }
+      frame = requestAnimationFrame(update);
+    };
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, [active, visible]);
+
+  const phase = Math.min(4, Math.floor(progress * 5));
+  const labels = ["SEEKING", "CONNECTING", "FORGING", "FUSING", "READY"];
+  const threshold = progress * SHARDS.length;
+  return (
+    <div
+      className={`shard-portal-loader ${visible ? "is-visible" : ""} ${progress >= 0.999 ? "is-complete" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label={`${labels[phase]} ${Math.round(progress * 100)}%`}
+      style={{ "--loader-progress": progress } as React.CSSProperties}
+    >
+      <svg viewBox="0 0 620 520" aria-hidden="true">
+        <defs>
+          <clipPath id="player-loader-k">
+            <path d="M217 84h67v128L382 84h79L356 227l108 211h-82l-72-148-26 34v114h-67z" />
+          </clipPath>
+          <radialGradient id="player-portal-core">
+            <stop stopColor="#ff514a" stopOpacity=".85" />
+            <stop offset=".42" stopColor="#a50912" stopOpacity=".5" />
+            <stop offset="1" stopColor="#070000" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <ellipse className="loader-portal-disc" cx="310" cy="402" rx="190" ry="59" />
+        <ellipse className="loader-ring ring-one" cx="310" cy="402" rx="150" ry="38" />
+        <ellipse className="loader-ring ring-two" cx="310" cy="402" rx="188" ry="52" />
+        <ellipse className="loader-ring ring-three" cx="310" cy="402" rx="112" ry="25" />
+        <circle className="loader-orbit-spark spark-one" r="5" />
+        <circle className="loader-orbit-spark spark-two" r="3" />
+        <path
+          className="loader-forged-k"
+          d="M217 84h67v128L382 84h79L356 227l108 211h-82l-72-148-26 34v114h-67z"
+        />
+        <g clipPath="url(#player-loader-k)">
+          {SHARDS.map((shard, index) => (
+            <polygon
+              key={index}
+              className={`loader-shard ${shard.order <= threshold ? "is-placed" : ""} ${shard.order <= threshold && shard.order > threshold - 4 ? "is-active" : ""}`}
+              points={shard.points}
+            />
+          ))}
+        </g>
+        <g className="loader-halo">
+          <circle cx="310" cy="245" r="105" />
+          <circle cx="310" cy="245" r="74" />
+        </g>
+        <g className="loader-rays" strokeLinecap="round">
+          <path d="M310 12v74M310 438v70M20 245h102M498 245h102M77 39l80 80M463 371l80 80M543 39l-80 80M157 371l-80 80" />
+          <path d="M164 9l39 91M456 9l-39 91M14 100l104 57M606 100l-104 57M14 390l104-57M606 390l-104-57M164 501l39-91M456 501l-39-91" />
+        </g>
+      </svg>
+      <div className="loader-copy">
+        <span>{labels[phase]}</span>
+        <strong>{Math.round(progress * 100)}%</strong>
+      </div>
+      <div className="loader-steps" aria-hidden="true">
+        {labels.map((label, index) => (
+          <i key={label} className={index <= phase ? "is-on" : ""} />
+        ))}
+      </div>
+      <p>
+        {progress >= 0.999
+          ? "READY TO PLAY"
+          : `Preparing ${compatible ? "compatible " : ""}playback`}
+      </p>
+    </div>
+  );
+}
+
 export default function StreamingPlayer({
   route,
   onBack,
@@ -219,8 +343,7 @@ export default function StreamingPlayer({
     [error, setError] = useState(false),
     [errorMessage, setErrorMessage] = useState(""),
     [providerReady, setProviderReady] = useState(false),
-    [controls, setControls] = useState(true),
-    [intro, setIntro] = useState(true);
+    [controls, setControls] = useState(true);
   const transcoded = compatible || rendition !== "original",
     activeQuality = bootstrap ? "bootstrap" : rendition,
     playbackOffset = bootstrap ? Math.floor(offset / 30) * 30 : offset,
@@ -354,8 +477,6 @@ export default function StreamingPlayer({
     absoluteTimeRef = useRef(absoluteTime);
   useEffect(() => {
     playbackRequestedAt.current = performance.now();
-    const timer = setTimeout(() => setIntro(false), 1800);
-    return () => clearTimeout(timer);
   }, []);
   useEffect(() => {
     restartRef.current = restart;
@@ -770,17 +891,8 @@ export default function StreamingPlayer({
           Tap to play
         </button>
       )}
-      {intro && (
-        <div className="kheyflix-intro" aria-label="Kheyflix">
-          <span>K</span>
-          <strong>KHEYFLIX</strong>
-        </div>
-      )}
-      {loading && !error && (
-        <div className="buffering" role="status">
-          <span />
-          <p>Loading video…</p>
-        </div>
+      {!error && (
+        <ShardPortalLoader active={loading} compatible={compatible} />
       )}
       {error && (
         <div className="playback-error" role="alert">
