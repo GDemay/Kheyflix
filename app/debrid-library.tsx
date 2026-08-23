@@ -60,6 +60,8 @@ async function requestCatalog(force = false) {
           ? "The Kheyflix streaming catalog is not configured on this server."
           : data.error?.message || "Kheyflix catalog is unavailable.",
       );
+    if (!Array.isArray(data.magnets))
+      throw new Error("Kheyflix received an invalid catalog response.");
     const titles = groupDebridCatalog(data.magnets as DebridMagnetRecord[]);
     catalogMemory = titles;
     try {

@@ -10,3 +10,16 @@
 - If authentication cannot write to `GDemay/Kheyflix`, stop and report the authentication problem. Do not use a fork as a fallback.
 - Before handing off work, confirm that the commit is present on `GDemay/Kheyflix` and report the canonical PR or commit URL.
 - Do not bypass, disable, or replace the tracked `.githooks/pre-push` repository/account guard.
+
+## Required delivery workflow
+
+- Before changing code, fetch `origin/main`, create an `originator/*` branch from it, and confirm both the repository URL and the exact `GDemay <7033942+GDemay@users.noreply.github.com>` commit identity. If either check fails, repair it before continuing.
+- Never push directly to `main`. Every code, configuration, workflow, or documentation change must be committed on a branch, pushed to `GDemay/Kheyflix`, and delivered through a pull request targeting `main`.
+- Open and merge pull requests as the GitHub user `GDemay`. If the CLI is authenticated as another user, use an authenticated `GDemay` browser session or stop; never create a fork or use another account as a workaround.
+- Before opening the pull request, run the relevant local lint, unit, integration, build, and playback tests. Add regression coverage for every bug fix. Do not weaken, skip, or remove tests to obtain a pass.
+- After opening the pull request, inspect every CI check and its logs. Fix failures on the same branch and repeat until all required PR checks pass. Never merge a red or pending pull request.
+- Merge only through the pull request. Then wait for the `main` CI/CD run associated with the exact merge commit; a successful run for an older commit is not evidence that the current change deployed.
+- Confirm production `/api/health` reports the exact merge commit and healthy required dependencies. Run the production verifier and the real playback test suite after deployment.
+- For playback changes, verify a first decoded frame followed by continuously advancing playback on both laptop and iPhone Safari (a real device when available, otherwise the iOS simulator). A rendered player, advancing controls, or a playlist response alone is not sufficient.
+- Treat external-provider failures, missing secrets, wrong deployed commits, skipped checks, and flaky playback as blockers. Do not report completion, merge success, or a healthy deployment until the full loop is green. Record the exact blocker and continue automatically once it is resolved.
+- Before handoff, confirm the canonical PR URL, merge commit on `GDemay/Kheyflix`, green CI/CD for that commit, exact production commit, and measured laptop/iPhone playback results.

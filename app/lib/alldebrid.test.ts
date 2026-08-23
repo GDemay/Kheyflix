@@ -12,6 +12,12 @@ describe('AllDebrid server integration',()=>{
     await expect(uploadMagnet('https://example.com/movie')).rejects.toBeInstanceOf(AllDebridError);
   });
 
+  it('maps HTTP 200 provider errors to a failing gateway status',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({status:'error',error:{code:'AUTH_USER_BANNED',message:'This account is banned'}}),{status:200})));
+    await expect(resolveVideo(999_999,0)).rejects.toMatchObject({code:'AUTH_USER_BANNED',status:502,message:'This account is banned'});
+  });
+
   it('maps common movie containers to browser media types',()=>{
     expect(contentTypeFor('movie.webm')).toBe('video/webm');
     expect(contentTypeFor('movie.mkv')).toBe('video/x-matroska');
