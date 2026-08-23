@@ -33,5 +33,16 @@ export function protectedArguments(args) {
     )
   )
     throw new Error("repository selectors are forbidden; the gateway pins GDemay/Kheyflix.");
+  for (const value of args.slice(1)) {
+    const urlRepository = value.match(
+      /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i,
+    )?.[1];
+    const qualifiedRepository = value.match(
+      /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:#\d+)?$/,
+    )?.[1];
+    const repository = urlRepository || qualifiedRepository;
+    if (repository && repository.toLowerCase() !== EXPECTED_REPOSITORY.toLowerCase())
+      throw new Error(`external repository reference \"${repository}\" is forbidden.`);
+  }
   return [...args, "--repo", EXPECTED_REPOSITORY];
 }
