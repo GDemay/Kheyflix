@@ -50,15 +50,21 @@ struct RootView: View {
 private struct LaunchBrandView: View {
     var body: some View {
         ZStack {
-            RadialGradient(colors: [Color.red.opacity(0.18), .black], center: .center, startRadius: 5, endRadius: 360)
+            Color.black
                 .ignoresSafeArea()
-            VStack(spacing: 10) {
-                Text("K").font(.system(size: 132, weight: .black, design: .rounded)).foregroundStyle(.red)
-                    .shadow(color: .red.opacity(0.35), radius: 28)
-                Text("KHEYFLIX").font(.system(size: 16, weight: .bold)).tracking(7)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Kheyflix")
+            Image("LaunchArtwork")
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity)
+                .accessibilityHidden(true)
+            LinearGradient(colors: [.clear, .black.opacity(0.28)], startPoint: .center, endPoint: .bottom)
+                .ignoresSafeArea()
+            Text("Kheyflix — Stories worth streaming")
+                .accessibilityHidden(true)
+                .opacity(0)
+            Color.clear
+                .accessibilityAddTraits(.isImage)
+                .accessibilityLabel("Kheyflix")
         }
     }
 }

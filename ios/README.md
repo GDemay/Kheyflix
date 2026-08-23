@@ -8,7 +8,11 @@ The iOS app is a SwiftUI/WKWebView native shell around the canonical React produ
 2. Open `ios/Kheyflix.xcodeproj` in Xcode.
 3. Select the `Kheyflix` scheme and a current iPhone simulator, then Run.
 
-Debug builds use `http://127.0.0.1:3001`; use `npm run dev:ios` to start the shared app and transcoder with the IPv4 listener required by Simulator. A physical iPhone cannot resolve the Mac loopback; use the native Server Settings recovery sheet or change `KHEYFLIX_BASE_URL` in the target configuration to an HTTPS deployment or the Mac's LAN address.
+Debug and Release builds use the public production service by default. To test a
+local checkout, pass `--server-url http://127.0.0.1:3001` in the scheme launch
+arguments after starting `npm run dev:ios`, or use the native Server Settings
+recovery sheet. A physical iPhone must use the Mac's LAN address rather than its
+loopback address.
 
 ## Tests
 
