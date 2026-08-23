@@ -35,7 +35,17 @@ async function request<T>(path:string, fields:Record<string,string|string[]> = {
   Object.entries(fields).forEach(([key,value]) => Array.isArray(value) ? value.forEach(item=>body.append(`${key}[]`,item)) : body.set(key,value));
   const response = await fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store', signal:AbortSignal.timeout(API_TIMEOUT_MS) });
   const envelope = await response.json() as ApiEnvelope<T>;
-  if (!response.ok || envelope.status !== 'success' || !envelope.data) throw new AllDebridError(envelope.error?.message || 'AllDebrid request failed.', envelope.error?.code, response.status || 502);
+  if (!response.ok || envelope.status !== 'success' || !envelope.data) {
+    // AllDebrid can report application errors in an HTTP 200 envelope. Never
+    // forward that 200 to media consumers: FFmpeg would otherwise try to
+    // decode the JSON error body as video and loop on "invalid data".
+    const status = response.ok ? 502 : response.status;
+    throw new AllDebridError(
+      envelope.error?.message || 'AllDebrid request failed.',
+      envelope.error?.code,
+      status,
+    );
+  }
   return envelope.data;
 }
 
