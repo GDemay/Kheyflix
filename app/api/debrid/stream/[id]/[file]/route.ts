@@ -16,11 +16,19 @@ async function handle(request:Request,{params}:{params:Promise<{id:string;file:s
     // Direct mode is an explicit opt-in for deployments with provider-safe
     // network controls.
     const relay=process.env.KHEYFLIX_STREAM_MODE!=='direct';
-    const media=await resolveVideo(Number(id),Number(file),relay?undefined:clientIp(request));
+    const ip=relay?undefined:clientIp(request);
+    let media=await resolveVideo(Number(id),Number(file),ip);
     if(new URL(media.url).protocol!=='https:')throw new AllDebridError('The media service returned an unsafe stream URL.','STREAM_URL_UNSAFE',502);
     if(!relay)return new Response(null,{status:307,headers:{Location:media.url,'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Kheyflix-Stream':'direct'}});
     const range=request.headers.get('range');
-    const upstream=await fetch(media.url,{method:request.method,headers:range?{Range:range}:{},redirect:'follow',signal:request.signal});
+    let upstream=await fetch(media.url,{method:request.method,headers:range?{Range:range}:{},redirect:'follow',signal:request.signal});
+    // AllDebrid CDN links are temporary. If a cached link has expired, unlock a
+    // fresh one once so playback recovers without requiring an app restart.
+    if(!upstream.ok&&upstream.status!==416){
+      await upstream.body?.cancel();
+      media=await resolveVideo(Number(id),Number(file),ip,true);
+      upstream=await fetch(media.url,{method:request.method,headers:range?{Range:range}:{},redirect:'follow',signal:request.signal});
+    }
     if(!upstream.ok || (!upstream.body&&request.method!=='HEAD')){await upstream.body?.cancel();return Response.json({error:{code:'STREAM_UPSTREAM_FAILED',message:'The media source is temporarily unavailable.'}},{status:upstream.status || 502})}
     const headers=new Headers();
     ['content-length','content-range','accept-ranges','etag','last-modified'].forEach(key=>{const value=upstream.headers.get(key);if(value)headers.set(key,value)});

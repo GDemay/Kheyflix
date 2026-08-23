@@ -45,4 +45,18 @@ describe('AllDebrid server integration',()=>{
     await expect(resolveVideo(42,0)).resolves.toEqual({url:'https://cdn.test/movie.webm',name:'Movie.webm',size:4096});
     expect(fetchMock.mock.calls[1][0]).toContain('/v4/link/unlock');
   });
+
+  it('can refresh an expired unlocked stream URL',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    const files={status:'success',data:{magnets:[{id:43,files:[{n:'Pilot.mkv',s:4096,l:'https://files.test/pilot'}]}]}};
+    const fetchMock=vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(files),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/old.mkv'}}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify(files),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/fresh.mkv'}}),{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+    await expect(resolveVideo(43,0)).resolves.toMatchObject({url:'https://cdn.test/old.mkv'});
+    await expect(resolveVideo(43,0,undefined,true)).resolves.toMatchObject({url:'https://cdn.test/fresh.mkv'});
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });

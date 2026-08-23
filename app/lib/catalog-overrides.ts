@@ -11,7 +11,7 @@ type CatalogOverride = {
 // known aliases always converge on the same title and metadata lookup.
 const SERIES_OVERRIDES: CatalogOverride[] = [
   { match: /\bdirty[ ._-]+magazine\b.*\bvictor'?s[ ._-]+other[ ._-]+family\b|\bforbidden[ ._-]+girlfriend\b.*\bkicked[ ._-]+out\b/i, title: "Malcolm in the Middle", year: 2000 },
-  { match: /\b(?:the[ ._-]+)?o[ ._-]*c\b|\boc[ ._-]+season\b/i, title: "The O.C.", year: 2003 },
+  { match: /\bthe[ ._-]+o[ ._-]*c(?:[ ._-]+season)?\b|\bo[._-]+c(?:[ ._-]+season)?\b/i, title: "The O.C.", year: 2003 },
   { match: /\bmalcolm[ ._-]+in[ ._-]+the[ ._-]+middle(?:[ ._-]+life'?s[ ._-]+still[ ._-]+unfair)?\b/i, title: "Malcolm in the Middle", year: 2000 },
   { match: /\bsouth[ ._-]+park\b/i, title: "South Park", year: 1997 },
   { match: /\bsquid[ ._-]+game\b/i, title: "Squid Game", year: 2021 },

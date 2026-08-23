@@ -108,13 +108,14 @@ const pruneStreamCache = (now=Date.now()) => {
   while(cache.size>STREAM_CACHE_MAX)cache.delete(cache.keys().next().value as string);
 };
 
-export async function resolveVideo(id:number,index:number,clientIp?:string) {
+export async function resolveVideo(id:number,index:number,clientIp?:string,refresh=false) {
   if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(index) || index < 0) throw new AllDebridError('Invalid media selection.','INVALID_MEDIA',400);
   const key=`${id}:${index}:${clientIp||'server'}`,now=Date.now();pruneStreamCache(now);
   const cache=shared.__kheyflixStreamCache??=new Map(),cached=cache.get(key);
-  if(cached&&now-cached.updatedAt<STREAM_FRESH_MS){cache.delete(key);cache.set(key,cached);return cached.value}
+  if(refresh)cache.delete(key);
+  if(!refresh&&cached&&now-cached.updatedAt<STREAM_FRESH_MS){cache.delete(key);cache.set(key,cached);return cached.value}
   const requests=shared.__kheyflixStreamRequests??=new Map(),pending=requests.get(key);
-  if(pending)return pending;
+  if(!refresh&&pending)return pending;
   if(requests.size>=STREAM_REQUEST_MAX)throw new AllDebridError('The playback resolver is busy. Try again shortly.','STREAM_RESOLVER_BUSY',429);
   const resolve=(async()=>{
     const videos = await filesForMagnet(id);
