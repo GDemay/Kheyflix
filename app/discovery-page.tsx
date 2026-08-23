@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { DebridMagnetRecord, groupDebridCatalog } from "./lib/media-parser";
 import type { ReleaseMetadata } from "./lib/release-parser";
+import { fetchWithTimeout, RequestTimeoutError } from "./lib/fetch-with-timeout";
 import { Route } from "./routing";
 
 type Result = {
@@ -39,6 +40,7 @@ type Preparation = {
 
 const formatSize = (bytes: number) =>
   bytes > 0 ? `${(bytes / 1024 ** 3).toFixed(bytes > 10 * 1024 ** 3 ? 0 : 1)} GB` : "Size pending";
+export const DISCOVERY_SEARCH_TIMEOUT_MS = 15_000;
 
 export default function DiscoveryPage({
   navigate,
@@ -82,9 +84,7 @@ export default function DiscoveryPage({
     [preparations],
   );
 
-  const search = async (event: FormEvent) => {
-    event.preventDefault();
-    const term = query.trim();
+  const runSearch = async (term: string) => {
     if (term.length < 2) return;
     setSearching(true);
     setError("");
@@ -92,7 +92,11 @@ export default function DiscoveryPage({
       const parameters = new URLSearchParams({ q: term, kind: searchKind });
       if (searchKind === "series" && requestedSeason) parameters.set("season", requestedSeason);
       if (searchKind === "series" && requestedEpisode) parameters.set("episode", requestedEpisode);
-      const response = await fetch(`/api/discovery/search?${parameters}`);
+      const response = await fetchWithTimeout(
+        `/api/discovery/search?${parameters}`,
+        {},
+        DISCOVERY_SEARCH_TIMEOUT_MS,
+      );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || "Search is unavailable.");
       setResults(data.results || []);
@@ -102,10 +106,19 @@ export default function DiscoveryPage({
       setSubtitleFilter("all");
     } catch (reason) {
       setResults([]);
-      setError(reason instanceof Error ? reason.message : "Search is unavailable.");
+      setError(
+        reason instanceof RequestTimeoutError
+          ? "Search timed out. Check your connection and try again."
+          : reason instanceof Error ? reason.message : "Search is unavailable.",
+      );
     } finally {
       setSearching(false);
     }
+  };
+
+  const search = (event: FormEvent) => {
+    event.preventDefault();
+    void runSearch(query.trim());
   };
 
   const prepare = async (result: Result) => {
@@ -223,8 +236,11 @@ export default function DiscoveryPage({
             placeholder="Search a movie, series, season or episode"
             aria-label="Search connected sources"
           />
-          <button disabled={searching || query.trim().length < 2}>
-            {searching ? <LoaderCircle className="spin" /> : "Search"}
+          <button
+            disabled={searching || query.trim().length < 2}
+            aria-label={searching ? "Searching…" : undefined}
+          >
+            {searching ? <><LoaderCircle className="spin" aria-hidden="true" /><span className="sr-only">Searching…</span></> : "Search"}
           </button>
         </form>
         {searchKind === "series" && (
@@ -244,7 +260,7 @@ export default function DiscoveryPage({
         </label>
       </div>
 
-      {error && <div className="discovery-message error"><CircleAlert />{error}</div>}
+      {error && <div className="discovery-message error" role="alert"><CircleAlert aria-hidden="true" /><span>{error}</span><button type="button" onClick={() => void runSearch(query.trim())} disabled={query.trim().length < 2}>Try again</button></div>}
       {!searching && !error && results.length === 0 && query && (
         <div className="discovery-message"><Search />Search to see available releases.</div>
       )}

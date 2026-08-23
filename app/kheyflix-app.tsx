@@ -28,6 +28,8 @@ import { DebridDetails, DebridExperience } from "./debrid-library";
 import DiscoveryPage from "./discovery-page";
 import { parseRoute, Route, routePath } from "./routing";
 import StreamingPlayer from "./streaming-player";
+import { normalizeSearchQuery } from "./catalog-ux";
+import { playbackReturnRoute } from "./lib/player-navigation";
 
 const subscribeToNothing = () => () => undefined;
 
@@ -55,7 +57,7 @@ function IconButton({
   );
 }
 
-function Header({
+export function Header({
   route,
   navigate,
 }: {
@@ -66,8 +68,17 @@ function Header({
   const [scrolled, setScrolled] = useState(false);
   const searchOpen = route.section === "search";
   const query = route.query ?? "";
-  const submit = (value: string) =>
-    navigate({ section: "search", query: value }, true);
+  const [searchDraft, setSearchDraft] = useState(query);
+  const submittedQuery = useRef(query);
+  useEffect(() => {
+    if (query !== submittedQuery.current) setSearchDraft(query);
+  }, [query]);
+  const submit = (value: string) => {
+    setSearchDraft(value);
+    const normalized = normalizeSearchQuery(value);
+    submittedQuery.current = normalized;
+    navigate({ section: "search", query: normalized }, true);
+  };
   useEffect(() => {
     const update = () => setScrolled(window.scrollY > 24);
     update();
@@ -116,12 +127,12 @@ function Header({
           </button>
         ))}
       </nav>
-      <div className={`header-search ${searchOpen ? "open" : ""}`}>
+      {searchOpen && <div className="header-search open">
         <Search size={19} />
         <input
           aria-label="Search titles"
           placeholder="Movies and series"
-          value={query}
+          value={searchDraft}
           onChange={(e) => submit(e.target.value)}
           onFocus={() => {
             if (route.section !== "search")
@@ -137,7 +148,7 @@ function Header({
             <X size={17} />
           </button>
         )}
-      </div>
+      </div>}
       {!searchOpen && (
         <IconButton
           label="Open search"
@@ -568,6 +579,7 @@ export default function KheyflixApp() {
   );
   const route = parseRoute(routeLocation);
   const previousRoute = useRef<Route>({ section: "home" });
+  const playerReturnRoute = useRef<Route>({ section: "home" });
   useEffect(() => {
     document.title =
       route.section === "stream"
@@ -578,6 +590,11 @@ export default function KheyflixApp() {
     (next: Route, replace = false) => {
       if (next.section === "title" || next.section === "watch")
         previousRoute.current = route;
+      playerReturnRoute.current = playbackReturnRoute(
+        playerReturnRoute.current,
+        route,
+        next,
+      );
       const path = routePath(next);
       window.history[replace ? "replaceState" : "pushState"]({}, "", path);
       window.dispatchEvent(new Event("kheyflix:navigate"));
@@ -640,10 +657,7 @@ export default function KheyflixApp() {
         key={`${route.id}-${route.file}`}
         route={route}
         navigate={navigate}
-        onBack={() => {
-          if (window.history.length > 1) window.history.back();
-          else navigate({ section: "profile" }, true);
-        }}
+        onBack={() => navigate(playerReturnRoute.current, true)}
       />
     );
   return (

@@ -134,7 +134,7 @@ export function groupDebridCatalog(
       const year = override?.year || yearFrom(magnet.filename);
       const key = catalogIdentity(title, year);
       const existing = series.get(key) || {
-        id: `series-${slug(title)}`,
+        id: `series-${slug(title)}-${year || "unknown"}`,
         title,
         category: "series" as const,
         year,
