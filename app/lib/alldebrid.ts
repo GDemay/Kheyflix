@@ -31,7 +31,15 @@ async function request<T>(path:string, fields:Record<string,string|string[]> = {
   Object.entries(fields).forEach(([key,value]) => Array.isArray(value) ? value.forEach(item=>body.append(`${key}[]`,item)) : body.set(key,value));
   const response = await fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store' });
   const envelope = await response.json() as ApiEnvelope<T>;
-  if (!response.ok || envelope.status !== 'success' || !envelope.data) throw new AllDebridError(envelope.error?.message || 'AllDebrid request failed.', envelope.error?.code, response.status || 502);
+  if (!response.ok || envelope.status !== 'success' || !envelope.data) {
+    const code=envelope.error?.code || 'ALLDEBRID_ERROR';
+    const authFailure=code.startsWith('AUTH_');
+    // AllDebrid returns many API failures with HTTP 200. Never forward that as
+    // an application success: clients would otherwise try to parse an error as
+    // an empty catalog and hide the actual account problem.
+    const status=response.ok ? (authFailure ? 401 : 502) : response.status;
+    throw new AllDebridError(envelope.error?.message || 'AllDebrid request failed.',code,status);
+  }
   return envelope.data;
 }
 

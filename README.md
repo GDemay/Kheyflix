@@ -24,6 +24,26 @@ npm run lint
 npm run build
 ```
 
+## Native iOS app
+
+The SwiftUI app in `ios/` is a native shell around the same responsive web
+interface and server routes used by the main application. Product UI changes
+therefore reach web and iOS together; the iOS target only owns native lifecycle,
+safe-area, navigation, offline recovery, and configuration behavior.
+
+For local development, start the IPv4 server used by Simulator and then open
+`ios/Kheyflix.xcodeproj` in Xcode:
+
+```sh
+npm run dev:ios
+open ios/Kheyflix.xcodeproj
+```
+
+Run the `Kheyflix` scheme on a current iPhone simulator. Its test plan includes
+Swift unit tests, a deterministic offline UI test, live Rabbit playback, and an
+AllDebrid failure-to-Rabbit recovery test. Live tests skip when the development
+server is not running.
+
 ## Railway deployment
 
 The committed Railway and Nixpacks configuration installs FFmpeg, builds the

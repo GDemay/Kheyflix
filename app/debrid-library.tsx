@@ -50,6 +50,8 @@ async function requestCatalog(force = false) {
       throw new Error(
         data.error?.code === "ALLDEBRID_NOT_CONFIGURED"
           ? "The Kheyflix streaming catalog is not configured on this server."
+          : data.error?.code === "AUTH_USER_BANNED"
+            ? "AllDebrid rejected this server account. Replace its server-side API key to restore the private catalog."
           : data.error?.message || "Kheyflix catalog is unavailable.",
       );
     const titles = groupDebridCatalog(data.magnets as DebridMagnetRecord[]);
@@ -471,7 +473,10 @@ export function DebridExperience({
         <Film />
         <h1>Kheyflix needs its catalog</h1>
         <p>{error}</p>
-        <button onClick={() => void load(true)}>Try again</button>
+        <div className="catalog-error-actions">
+          <button onClick={() => void load(true)}>Try again</button>
+          <button onClick={() => navigate({section:"watch",id:"big-buck-bunny"})}>Watch Big Buck Bunny</button>
+        </div>
       </section>
     );
   if (section === "home" && featured) {

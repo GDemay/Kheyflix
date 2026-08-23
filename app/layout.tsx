@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
@@ -21,6 +21,13 @@ export const metadata: Metadata = {
     images: [{ url: '/og.png', width: 1672, height: 941, alt: 'Kheyflix — Stories worth streaming' }],
   },
   twitter: { card: 'summary_large_image', title: 'Kheyflix — Stories worth streaming', description: 'Discover original stories and stream legal open films on Kheyflix.', images: ['/og.png'] },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#08090b',
 };
 
 export default function RootLayout({

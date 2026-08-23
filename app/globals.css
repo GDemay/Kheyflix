@@ -48,3 +48,20 @@
 .catalog-trailer{position:absolute;z-index:2;inset:0;width:100%;height:100%;border:0;pointer-events:none;background:#000;transform:scale(1.01)}
 .discovery-filters{max-width:1050px;margin:0 auto 18px;display:flex;align-items:end;gap:10px;padding:14px;background:#0e0f12;border:1px solid #ffffff12;border-radius:7px;position:sticky;top:76px;z-index:5}.discovery-filters>div{display:grid;gap:5px}.discovery-filters span{font-size:.58rem;color:#777;text-transform:uppercase;letter-spacing:.12em}.discovery-filters select{min-width:145px;background:#18191e;color:#eee;border:1px solid #ffffff18;border-radius:4px;padding:9px 30px 9px 10px}.discovery-filters strong{margin-left:auto;padding:10px;color:#999;font-size:.72rem}.release-tags{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}.release-tags span,.release-tags b{font-size:.61rem;line-height:1;padding:5px 7px;border-radius:3px;background:#24262c;color:#c9cbd2;font-weight:700}.release-tags b{background:#e5091422;color:#ff7780;border:1px solid #e5091433}.release-tags .subtitle-tag{background:#123323;color:#75e09d}.release-details{font-size:.62rem;color:#696b72;margin-top:8px}.release-details summary{cursor:pointer;color:#85878e}.release-details[open]{line-height:1.45}
 @media(max-width:700px){.discovery-filters{position:static;display:grid;grid-template-columns:1fr 1fr}.discovery-filters select{width:100%;min-width:0}.discovery-filters strong{margin:0}}
+
+/* Native iOS shell: WKWebView opts into edge-to-edge content, so interactive
+   chrome must respect Dynamic Island and home-indicator safe areas. */
+html[data-kheyflix-native="ios"] .app-header{height:calc(64px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top)}
+html[data-kheyflix-native="ios"] .app-header nav{top:calc(60px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .header-search.open{top:calc(64px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .featured-hero,
+html[data-kheyflix-native="ios"] .debrid-hero{padding-top:calc(115px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .catalog-skeleton{padding-top:calc(64px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .profile-page,
+html[data-kheyflix-native="ios"] .library-page,
+html[data-kheyflix-native="ios"] .discovery-page,
+html[data-kheyflix-native="ios"] .search-page{padding-top:calc(100px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .player-top{padding-top:calc(12px + env(safe-area-inset-top))}
+html[data-kheyflix-native="ios"] .player-controls{padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+html[data-kheyflix-native="ios"] footer{padding-bottom:calc(55px + env(safe-area-inset-bottom))}
+.catalog-error-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}.catalog-error-actions button+button{background:#292a30;color:#fff}

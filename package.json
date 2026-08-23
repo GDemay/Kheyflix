@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "node scripts/run-dev.mjs",
+    "dev:ios": "KHEYFLIX_DEV_HOSTNAME=0.0.0.0 KHEYFLIX_DEV_PORT=3001 KHEYFLIX_TRANSCODER_PORT=3201 KHEYFLIX_APP_ORIGIN=http://127.0.0.1:3001 KHEYFLIX_TRANSCODER_URL=http://127.0.0.1:3201 node scripts/run-dev.mjs",
     "build": "vinext build",
     "start": "node scripts/run-production.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

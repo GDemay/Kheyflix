@@ -18,6 +18,16 @@ describe('AllDebrid server integration',()=>{
     expect(contentTypeFor('movie.mp4')).toBe('video/mp4');
   });
 
+  it('does not disguise an HTTP 200 AllDebrid account error as success',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status:'error',error:{code:'AUTH_USER_BANNED',message:'This account is banned'},
+    }),{status:200})));
+    await expect(listMagnets()).rejects.toMatchObject({
+      code:'AUTH_USER_BANNED',status:401,message:'This account is banned',
+    });
+  });
+
   it('turns ready account magnets into indexed playable video files',async()=>{
     process.env.ALLDEBRID_API_KEY='test-only-key';
     const fetchMock=vi.fn()
