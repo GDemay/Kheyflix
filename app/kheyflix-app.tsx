@@ -611,15 +611,33 @@ export default function KheyflixApp() {
         next,
       );
       const path = routePath(next);
-      window.history[replace ? "replaceState" : "pushState"]({}, "", path);
+      const currentReturn = window.history.state?.kheyflixReturn;
+      window.history[replace ? "replaceState" : "pushState"](
+        {
+          kheyflixReturn:
+            next.section === "title" || next.section === "debrid"
+              ? routePath(route)
+              : currentReturn,
+        },
+        "",
+        path,
+      );
       window.dispatchEvent(new Event("kheyflix:navigate"));
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
     [route],
   );
   const closeDetails = useCallback(() => {
-    if (window.history.length > 1) window.history.back();
-    else navigate(previousRoute.current, true);
+    const returnPath = window.history.state?.kheyflixReturn;
+    navigate(
+      typeof returnPath === "string"
+        ? parseRoute(returnPath)
+        : previousRoute.current.section === "title" ||
+            previousRoute.current.section === "watch"
+          ? { section: "home" }
+          : previousRoute.current,
+      true,
+    );
   }, [navigate]);
   const openTitle = (item: MediaTitle) =>
     navigate({ section: "title", id: item.id });
