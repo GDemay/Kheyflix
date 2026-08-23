@@ -21,6 +21,7 @@
     "verify:production": "node scripts/verify-deployment.mjs production"
   },
   "dependencies": {
+    "hls.js": "^1.7.1",
     "lucide-react": "^0.468.0",
     "next": "^16.3.2",
     "react": "19.2.6",

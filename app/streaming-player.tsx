@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import {
   ArrowLeft,
   Captions,
@@ -440,6 +441,30 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
+    const element = video.current;
+    if (!iosPlayback || !source || !element || !Hls.isSupported()) return;
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      backBufferLength: 30,
+    });
+    hls.loadSource(source);
+    hls.attachMedia(element);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      element.muted = true;
+      element.volume = 0;
+      void element.play().catch(() => setControls(true));
+    });
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      console.error("[playback] iOS HLS error", {
+        type: data.type,
+        details: data.details,
+        fatal: data.fatal,
+      });
+    });
+    return () => hls.destroy();
+  }, [iosPlayback, source]);
+  useEffect(() => {
     if (!requiresMutedAutoplay(navigator.userAgent)) return;
     if (video.current) {
       video.current.muted = true;
@@ -448,9 +473,6 @@ export default function StreamingPlayer({
     const frame = requestAnimationFrame(() => setVolume(0));
     return () => cancelAnimationFrame(frame);
   }, []);
-  useEffect(() => {
-    if (iosPlayback && source) window.location.replace(source);
-  }, [iosPlayback, source]);
   useEffect(() => {
     if (qualityMode !== "auto" || !playing || loading) return;
     const timer = setTimeout(() => adaptQuality("up"), 25_000);
@@ -503,7 +525,7 @@ export default function StreamingPlayer({
       <video
         key={source}
         ref={video}
-        src={source}
+        src={iosPlayback && Hls.isSupported() ? undefined : source}
         autoPlay
         muted={volume === 0}
         playsInline
@@ -545,9 +567,16 @@ export default function StreamingPlayer({
             setNativeDuration(event.currentTarget.duration);
         }}
         onLoadedData={() => setLoading(false)}
-        onCanPlay={() => {
+        onCanPlay={(event) => {
           startupRetries.current = 0;
           setLoading(false);
+          if (!requiresMutedAutoplay(navigator.userAgent)) return;
+          event.currentTarget.muted = true;
+          event.currentTarget.volume = 0;
+          void event.currentTarget.play().catch(() => {
+            setPlaying(false);
+            setControls(true);
+          });
         }}
         onWaiting={() => {
           setLoading(true);
@@ -598,6 +627,22 @@ export default function StreamingPlayer({
           />
         )}
       </video>
+      {iosPlayback && !playing && !loading && !error && (
+        <button
+          className="ios-play-prompt"
+          onClick={(event) => {
+            event.stopPropagation();
+            const element = video.current;
+            if (!element) return;
+            element.muted = true;
+            element.volume = 0;
+            void element.play().catch(() => setControls(true));
+          }}
+        >
+          <Play />
+          Tap to play
+        </button>
+      )}
       {intro && (
         <div className="kheyflix-intro" aria-label="Kheyflix">
           <span>K</span>
