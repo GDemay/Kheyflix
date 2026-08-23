@@ -26,13 +26,6 @@ export interface MediaTitle {
 }
 
 export const catalog: MediaTitle[] = [
-  {
-    id: 'big-buck-bunny', title: 'Big Buck Bunny', category: 'movie', year: 2008,
-    rating: 'U', duration: '10m', match: 98, genres: ['Animation', 'Comedy', 'Open Film'],
-    description: 'A gentle giant discovers that even the quietest meadow can hide a little chaos in this beloved Blender Foundation open movie.',
-    cast: ['Big Buck Bunny', 'Frank', 'Rinky', 'Gamera'], director: 'Sacha Goedegebure', tone: 'meadow', featured: true, playable: true,
-    source: { url: 'https://upload.wikimedia.org/wikipedia/commons/c/c0/Big_Buck_Bunny_4K.webm', type: 'video/webm', attribution: '© 2008 Blender Foundation | bigbuckbunny.org — CC BY 3.0', licenseUrl: 'https://peach.blender.org/about/' },
-  },
   { id:'neon-divide', title:'Neon Divide', category:'series', year:2026, rating:'13+', duration:'1 season', match:94, genres:['Sci-Fi','Thriller'], description:'Two couriers race across a fractured megacity carrying a secret powerful enough to reunite it.', cast:['Mara Voss','Ari Chen'], director:'Kheyflix Studio', tone:'violet' },
   { id:'afterlight', title:'Afterlight', category:'movie', year:2025, rating:'16+', duration:'1h 48m', match:91, genres:['Drama','Mystery'], description:'A photographer returns to her coastal hometown and finds a roll of film that should not exist.', cast:['Lena Hart','Noah Vale'], director:'Mira Sol', tone:'sunset' },
   { id:'the-deep-blue', title:'The Deep Blue', category:'series', year:2026, rating:'7+', duration:'6 episodes', match:89, genres:['Documentary','Nature'], description:'A breathtaking expedition through the least explored habitats beneath the ocean surface.', cast:['Dr. Amara Cole'], director:'Kheyflix Earth', tone:'ocean' },
@@ -55,7 +48,7 @@ export const searchCatalog = (query: string) => {
 };
 
 export const rails = [
-  { title: 'Trending on Kheyflix', ids: ['big-buck-bunny','neon-divide','afterlight','the-deep-blue','dust-and-thunder','silent-orbit'] },
+  { title: 'Trending on Kheyflix', ids: ['neon-divide','afterlight','the-deep-blue','dust-and-thunder','silent-orbit'] },
   { title: 'Only on Kheyflix', ids: ['midnight-table','paper-kingdom','silent-orbit','neon-divide','northbound','glass-house'] },
   { title: 'Stories to get lost in', ids: ['wild-current','the-deep-blue','last-frequency','afterlight','dust-and-thunder','paper-kingdom'] },
 ];
