@@ -34,10 +34,20 @@ export function protectedArguments(args) {
   )
     throw new Error("repository selectors are forbidden; the gateway pins GDemay/Kheyflix.");
   for (const value of args.slice(1)) {
-    const urlRepository = value.match(
+    let normalized = value;
+    try {
+      for (let pass = 0; pass < 5; pass += 1) {
+        const decoded = decodeURIComponent(normalized);
+        if (decoded === normalized) break;
+        normalized = decoded;
+      }
+    } catch {
+      throw new Error("malformed encoded argument is forbidden.");
+    }
+    const urlRepository = normalized.match(
       /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i,
     )?.[1];
-    const qualifiedRepository = value.match(
+    const qualifiedRepository = normalized.match(
       /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:#\d+)?$/,
     )?.[1];
     const repository = urlRepository || qualifiedRepository;

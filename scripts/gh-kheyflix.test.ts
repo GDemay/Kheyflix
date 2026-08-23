@@ -36,6 +36,9 @@ describe("Kheyflix GitHub CLI boundary", () => {
     ["external issue URL", ["issue", "close", "https://github.com/octocat/Hello-World/issues/1"]],
     ["qualified PR", ["pr", "view", "octocat/Hello-World#1"]],
     ["issue transfer destination", ["issue", "transfer", "1", "octocat/Hello-World"]],
+    ["encoded external URL", ["pr", "close", "https://github.com/octocat%2FHello-World/pull/1"]],
+    ["double-encoded external URL", ["pr", "merge", "https://github.com/octocat%252FHello-World/pull/1"]],
+    ["malformed encoding", ["pr", "view", "https://github.com/octocat%2/Hello-World/pull/1"]],
   ])("rejects the %s escape", (_label, args) => {
     expect(() => protectedArguments(args)).toThrow();
   });
