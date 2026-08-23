@@ -43,6 +43,7 @@ import {
   serializePlaybackPreferences,
 } from "./lib/playback-preferences";
 import { Route } from "./routing";
+import { PlaybackRequestGate } from "./lib/player-navigation";
 
 type MediaInfo = {
   duration: number;
@@ -127,7 +128,8 @@ export default function StreamingPlayer({
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
     lastSaved = useRef(0),
     lastQualitySwitch = useRef(0),
-    startupRetries = useRef(0);
+    startupRetries = useRef(0),
+    mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
         return JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
@@ -362,11 +364,18 @@ export default function StreamingPlayer({
     };
   }, [file, id, session, stop, transcoded]);
   useEffect(() => {
-    let active = true;
-    void fetch(`/api/debrid/media/${id}/${file}`)
-      .then((response) => (response.ok ? response.json() : Promise.reject()))
-      .then((value: MediaInfo) => {
-        if (!active) return;
+    const request = mediaRequests.current.begin();
+    const controller = new AbortController();
+    void fetch(`/api/debrid/media/${id}/${file}`, {
+      signal: controller.signal,
+    })
+      .then((response) =>
+        response.ok
+          ? (response.json() as Promise<MediaInfo>)
+          : Promise.reject(),
+      )
+      .then((value) => {
+        if (!request.isCurrent()) return;
         setInfo(value);
         const savedPreferences = parsePlaybackPreferences(
           localStorage.getItem(`${PREFERENCES_KEY}:${preferenceKey}`),
@@ -410,7 +419,8 @@ export default function StreamingPlayer({
       })
       .catch(() => setMediaReady(true));
     return () => {
-      active = false;
+      request.cancel();
+      controller.abort();
     };
   }, [file, id, identity, preferenceKey, route.compat]);
   useEffect(() => {
@@ -449,10 +459,12 @@ export default function StreamingPlayer({
     return () => window.removeEventListener("keydown", onKey);
   }, [displayTime, menu, next, playNext, safeBack, seek, toggle]);
   useEffect(() => {
+    const requests = mediaRequests.current;
     const leave = () => persistRef.current();
     window.addEventListener("pagehide", leave);
     return () => {
       window.removeEventListener("pagehide", leave);
+      requests.invalidate();
       persistRef.current();
       stopRef.current();
     };

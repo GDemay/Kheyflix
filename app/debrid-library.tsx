@@ -22,8 +22,14 @@ import { parseWatchProgress, PlaybackQueueItem } from "./lib/watch-progress";
 import { Route } from "./routing";
 import { playKheyflixSting } from "./lib/brand-sting";
 import { FAVORITES_KEY, friendsFirst, parseFavorites, toggleFavorite } from "./lib/favorites";
+import {
+  createCatalogSectionQueries,
+  episodeCountLabel,
+  normalizeSearchQuery,
+  updateCatalogSectionQuery,
+} from "./catalog-ux";
 
-const CATALOG_KEY = "kheyflix:catalog:v3",
+const CATALOG_KEY = "kheyflix:catalog:v4",
   METADATA_PREFIX = "kheyflix:metadata:v2:",
   QUEUE_KEY = "kheyflix:playback-queue:v1";
 let catalogMemory: CatalogTitle[] | undefined,
@@ -370,7 +376,7 @@ function CatalogCard({
       <strong>{displayTitle(item, metadata)}</strong>
       <small>
         {item.category === "series"
-          ? `${item.episodes.length} episodes`
+          ? episodeCountLabel(item.episodes.length)
           : item.year || "Movie"}{" "}
         · Ready to stream
       </small>
@@ -466,7 +472,9 @@ export function DebridExperience({
   searchQuery?: string;
 }) {
   const { titles, loading, refreshing, error, load } = useDebridCatalog();
-  const [query, setQuery] = useState("");
+  const [sectionQueries, setSectionQueries] = useState(
+    createCatalogSectionQueries,
+  );
   const [favorites, setFavorites] = useState(() =>
     typeof localStorage === "undefined"
       ? []
@@ -500,7 +508,13 @@ export function DebridExperience({
     series[0] ||
     movies[0];
   const featuredMetadata = useMetadata(featured, true);
-  const term = section === "search" ? searchQuery : query;
+  const term = normalizeSearchQuery(
+    section === "search"
+      ? searchQuery
+      : section === "movies" || section === "series"
+        ? sectionQueries[section]
+        : "",
+  );
   const base =
     section === "movies" ? movies : section === "series" ? series : titles;
   const filtered = base.filter((item) =>
@@ -641,8 +655,17 @@ export function DebridExperience({
           <input
             aria-label={`Search ${section}`}
             placeholder={`Search ${section}…`}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            value={
+              section === "movies" || section === "series"
+                ? sectionQueries[section]
+                : ""
+            }
+            onChange={(event) => {
+              if (section === "movies" || section === "series")
+                setSectionQueries((queries) =>
+                  updateCatalogSectionQuery(queries, section, event.target.value),
+                );
+            }}
           />
         )}
       </div>

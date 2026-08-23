@@ -1,3 +1,5 @@
+import { normalizeSearchQuery } from './catalog-ux';
+
 export type Route = { section: 'home'|'movies'|'series'|'search'|'discover'|'title'|'watch'|'profile'|'debrid'|'stream'; id?: string; file?:number; title?:string; query?: string; compat?:boolean };
 
 export const parseRoute = (location = '/'): Route => {
@@ -9,14 +11,14 @@ export const parseRoute = (location = '/'): Route => {
   if (parts[0] === 'title') return { section:'title', id:parts[1] };
   if (parts[0] === 'profile') return { section:'profile' };
   if (parts[0] === 'discover') return { section:'discover' };
-  if (parts[0] === 'search') return { section:'search', query:url.searchParams.get('q') ?? '' };
+  if (parts[0] === 'search') return { section:'search', query:normalizeSearchQuery(url.searchParams.get('q') ?? '') };
   if (parts[0] === 'movies' || parts[0] === 'series') return { section:parts[0] };
   return { section:'home' };
 };
 
 export const routePath = (route:Route) => {
   if (route.section === 'home') return '/';
-  if (route.section === 'search') return `/search${route.query ? `?q=${encodeURIComponent(route.query)}` : ''}`;
+  if (route.section === 'search') { const query=normalizeSearchQuery(route.query || '');return `/search${query ? `?q=${encodeURIComponent(query)}` : ''}`; }
   if (route.section === 'stream') { const slug=(route.title||'kheyflix-video').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,100);return `/stream/${route.id}/${route.file}/${slug}${route.compat?'?compat=1':''}`; }
   if (route.section === 'debrid') return `/debrid/${encodeURIComponent(route.id||'')}${route.file===undefined?'':`/${route.file}`}?title=${encodeURIComponent(route.title || 'Kheyflix title')}`;
   if (route.section === 'title' || route.section === 'watch') return `/${route.section}/${route.id}`;
