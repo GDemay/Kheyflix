@@ -7,15 +7,7 @@ struct KheyflixWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     func makeUIView(context: Context) -> WKWebView {
-        let controller = WKUserContentController()
-        controller.addUserScript(WKUserScript(
-            source: "document.documentElement.dataset.kheyflixNative='ios'; document.documentElement.style.webkitTouchCallout='none';",
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
-
         let configuration = WKWebViewConfiguration()
-        configuration.userContentController = controller
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -58,6 +50,9 @@ struct KheyflixWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // Apply native-only layout after React hydration so the injected
+            // attribute cannot disagree with the server-rendered document.
+            webView.evaluateJavaScript("setTimeout(() => { document.documentElement.dataset.kheyflixNative='ios'; document.documentElement.style.webkitTouchCallout='none'; }, 1000);")
             Task { @MainActor in
                 model.finishLoading()
                 model.canGoBack = webView.canGoBack
