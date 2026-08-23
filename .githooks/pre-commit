@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+expected_name='GDemay'
+expected_email='7033942+GDemay@users.noreply.github.com'
+actual_name=$(git config user.name || true)
+actual_email=$(git config user.email || true)
+
+if [ "$actual_name" != "$expected_name" ] || [ "$actual_email" != "$expected_email" ]; then
+  echo "Kheyflix commit blocked: expected $expected_name <$expected_email>, got $actual_name <$actual_email>." >&2
+  echo "Set the repository identity before committing." >&2
+  exit 1
+fi
+
