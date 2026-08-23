@@ -23,3 +23,8 @@
 - For playback changes, verify a first decoded frame followed by continuously advancing playback on both laptop and iPhone Safari (a real device when available, otherwise the iOS simulator). A rendered player, advancing controls, or a playlist response alone is not sufficient.
 - Treat external-provider failures, missing secrets, wrong deployed commits, skipped checks, and flaky playback as blockers. Do not report completion, merge success, or a healthy deployment until the full loop is green. Record the exact blocker and continue automatically once it is resolved.
 - Before handoff, confirm the canonical PR URL, merge commit on `GDemay/Kheyflix`, green CI/CD for that commit, exact production commit, and measured laptop/iPhone playback results.
+
+## Playback fixture prohibition
+
+- Never add, launch, autoplay, test, or use Big Buck Bunny or another demo/open movie as Kheyflix playback evidence.
+- Loader, playback, audio, and deployment verification must use a real title from the live streaming catalog and its production playback path.

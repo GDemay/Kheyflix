@@ -6,20 +6,20 @@ describe('Kheyflix routing', () => {
     expect(parseRoute('/')).toEqual({ section:'home' });
     expect(parseRoute('/movies')).toEqual({ section:'movies' });
     expect(parseRoute('/series')).toEqual({ section:'series' });
-    expect(parseRoute('/title/big-buck-bunny')).toEqual({ section:'title', id:'big-buck-bunny' });
-    expect(parseRoute('/watch/big-buck-bunny')).toEqual({ section:'watch', id:'big-buck-bunny' });
+    expect(parseRoute('/title/catalog-title')).toEqual({ section:'title', id:'catalog-title' });
+    expect(parseRoute('/watch/catalog-title')).toEqual({ section:'watch', id:'catalog-title' });
     expect(parseRoute('/profile')).toEqual({ section:'profile' });
     expect(parseRoute('/discover')).toEqual({ section:'discover' });
     expect(parseRoute('/stream/123/0?title=Open%20Movie')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie', compat:false });
     expect(parseRoute('/stream/123/0?title=Open%20Movie&compat=1')).toEqual({ section:'stream', id:'123', file:0, title:'Open Movie', compat:true });
     expect(parseRoute('/debrid/123/2?title=My%20Movie')).toEqual({ section:'debrid', id:'123', file:2, title:'My Movie' });
-    expect(parseRoute('/search?q=Big%20Buck')).toEqual({ section:'search', query:'Big Buck' });
+    expect(parseRoute('/search?q=Live%20Title')).toEqual({ section:'search', query:'Live Title' });
   });
 
   it('creates encoded, refreshable paths', () => {
     expect(routePath({section:'search',query:'sci fi'})).toBe('/search?q=sci%20fi');
     expect(routePath({section:'discover'})).toBe('/discover');
-    expect(routePath({section:'watch',id:'big-buck-bunny'})).toBe('/watch/big-buck-bunny');
+    expect(routePath({section:'watch',id:'catalog-title'})).toBe('/watch/catalog-title');
     expect(routePath({section:'stream',id:'123',file:0,title:'Open Movie'})).toBe('/stream/123/0/open-movie');
     expect(routePath({section:'stream',id:'123',file:0,title:'Open Movie',compat:true})).toBe('/stream/123/0/open-movie?compat=1');
     expect(routePath({section:'debrid',id:'123',file:2,title:'My Movie'})).toBe('/debrid/123/2?title=My%20Movie');
