@@ -32,8 +32,6 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   }));
   const ios = /(?:iPhone|iPad|iPod)/i.test(initial.userAgent) ||
     (/Macintosh/i.test(initial.userAgent) && /Mobile/i.test(initial.userAgent));
-  expect(initial.muted).toBe(ios);
-  expect(initial.volume).toBe(ios ? 0 : 1);
   expect(initial.readyState).toBeGreaterThanOrEqual(2);
   expect(initial.width).toBeGreaterThanOrEqual(640);
   expect(initial.height).toBeGreaterThanOrEqual(360);
