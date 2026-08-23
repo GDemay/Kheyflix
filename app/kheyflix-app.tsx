@@ -342,6 +342,7 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
     [volume, setVolume] = useState(1),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
+    [soundPrompt, setSoundPrompt] = useState(false),
     [controls, setControls] = useState(true);
   const showControls = useCallback(() => {
     setControls(true);
@@ -432,15 +433,15 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
           event.currentTarget.muted = false;
           event.currentTarget.volume = volume;
           void event.currentTarget.play().catch(() => {
-            // Preserve audible playback as the default. If autoplay with sound
-            // is blocked, leave the controls ready for a user-initiated play.
             setPlaying(false);
             setControls(true);
+            setSoundPrompt(true);
           });
         }}
         onClick={toggle}
         onPlay={() => {
           setPlaying(true);
+          setSoundPrompt(false);
           showControls();
         }}
         onPause={() => setPlaying(false)}
@@ -461,6 +462,23 @@ function Player({ item, onBack }: { item: MediaTitle; onBack: () => void }) {
       </video>
       {!error && (
         <ShardPortalLoader active={loading} compatible={false} />
+      )}
+      {soundPrompt && !loading && !error && (
+        <button
+          className="ios-play-prompt"
+          onClick={(event) => {
+            event.stopPropagation();
+            const element = video.current;
+            if (!element) return;
+            element.muted = false;
+            element.volume = volume || 1;
+            setVolume(element.volume);
+            void element.play().catch(() => setError(true));
+          }}
+        >
+          <Play fill="currentColor" />
+          Play with sound
+        </button>
       )}
       {error && (
         <div className="playback-error" role="alert">
