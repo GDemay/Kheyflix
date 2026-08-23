@@ -8,7 +8,10 @@ struct RootView: View {
     var body: some View {
         ZStack {
             Color(red: 0.031, green: 0.035, blue: 0.043).ignoresSafeArea()
-            KheyflixWebView(model: model).ignoresSafeArea()
+            // Keep the web chrome below the Dynamic Island/status bar. Media
+            // may still extend beneath the home indicator and side edges.
+            KheyflixWebView(model: model)
+                .ignoresSafeArea(edges: [.horizontal, .bottom])
 
             if model.isLoading && model.progress < 1 {
                 VStack {

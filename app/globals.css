@@ -65,3 +65,4 @@ html[data-kheyflix-native="ios"] .player-top{padding-top:calc(12px + env(safe-ar
 html[data-kheyflix-native="ios"] .player-controls{padding-bottom:calc(14px + env(safe-area-inset-bottom))}
 html[data-kheyflix-native="ios"] footer{padding-bottom:calc(55px + env(safe-area-inset-bottom))}
 .catalog-error-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}.catalog-error-actions button+button{background:#292a30;color:#fff}
+@media(max-width:700px){.app-header>.mobile-menu{order:-1}.app-header>.brand{white-space:nowrap;font-size:1.28rem}}
