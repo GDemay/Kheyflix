@@ -150,6 +150,15 @@ export default function StreamingPlayer({
     preferenceKey =
       currentQueue?.seriesId || currentQueue?.titleId || identity.titleId;
   const [info, setInfo] = useState<MediaInfo>(),
+    [iosPlayback] = useState(() =>
+      typeof navigator !== "undefined" &&
+      requiresMutedAutoplay(navigator.userAgent) &&
+      Boolean(
+        document
+          .createElement("video")
+          .canPlayType("application/vnd.apple.mpegurl"),
+      ),
+    ),
     [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
     [copyCompatibleVideo, setCopyCompatibleVideo] = useState(false),
@@ -186,7 +195,9 @@ export default function StreamingPlayer({
     absoluteTime = transcoded ? offset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
   const source = mediaReady
-    ? transcoded
+    ? iosPlayback && transcoded
+      ? `/api/debrid/hls/${id}/${file}/${session}/master.m3u8?start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`
+      : transcoded
       ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
@@ -418,6 +429,9 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
+    if (iosPlayback && source) window.location.replace(source);
+  }, [iosPlayback, source]);
+  useEffect(() => {
     if (qualityMode !== "auto" || !playing || loading) return;
     const timer = setTimeout(() => adaptQuality("up"), 25_000);
     return () => clearTimeout(timer);
@@ -548,7 +562,7 @@ export default function StreamingPlayer({
           }
         }}
       >
-        {!compatible && subtitle !== undefined && (
+        {!compatible && !iosPlayback && subtitle !== undefined && (
           <track
             key={subtitle}
             kind="subtitles"

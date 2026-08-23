@@ -1,5 +1,8 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   audioSyncOptions,
   selectedStreamIndex,
@@ -11,6 +14,7 @@ const port = Number(process.env.KHEYFLIX_TRANSCODER_PORT || 3101),
 const ffmpeg = process.env.KHEYFLIX_FFMPEG_PATH || "ffmpeg",
   ffprobe = process.env.KHEYFLIX_FFPROBE_PATH || "ffprobe";
 const jobs = new Map(),
+  hlsJobs = new Map(),
   jobTouched = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
@@ -28,6 +32,40 @@ const MAX_JOBS = 4,
     "mov_text",
   ]);
 const inputFor = (id, file) => `${appOrigin}/api/debrid/stream/${id}/${file}`;
+const stopJob = (token) => {
+  const child = jobs.get(token);
+  if (child && !child.killed) child.kill("SIGKILL");
+  jobs.delete(token);
+  const hls = hlsJobs.get(token);
+  if (hls) {
+    if (!hls.child.killed) hls.child.kill("SIGKILL");
+    hlsJobs.delete(token);
+    void rm(hls.directory, { recursive: true, force: true });
+  }
+  jobTouched.delete(token);
+};
+const waitForFile = async (path, timeout = 30_000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const details = await stat(path);
+      if (details.size) return details;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("The HLS stream did not become ready.");
+};
+const waitForPlaylist = async (path, timeout = 30_000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const body = await readFile(path, "utf8");
+      if ((body.match(/#EXTINF:/g) || []).length >= 3) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("The HLS playlist did not become ready.");
+};
 const json = (response, status, value) => {
   response.writeHead(status, {
     "Content-Type": "application/json",
@@ -143,31 +181,123 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/health")
       return json(response, 200, {
         ok: true,
-        jobs: jobs.size + subtitleJobs.size,
+        jobs: jobs.size + hlsJobs.size + subtitleJobs.size,
         probes: probeRequests.size,
       });
     const stop = url.pathname.match(/^\/stop\/([a-z0-9-]+)$/i);
     if (stop) {
-      const child = jobs.get(stop[1]);
-      if (child && !child.killed) child.kill("SIGKILL");
-      jobs.delete(stop[1]);
-      jobTouched.delete(stop[1]);
+      stopJob(stop[1]);
       response.writeHead(204).end();
       return;
     }
     const touch = url.pathname.match(/^\/touch\/([a-z0-9-]+)$/i);
     if (touch) {
-      if (jobs.has(touch[1])) jobTouched.set(touch[1], Date.now());
+      if (jobs.has(touch[1]) || hlsJobs.has(touch[1]))
+        jobTouched.set(touch[1], Date.now());
       response.writeHead(204).end();
       return;
     }
     const probe = url.pathname.match(/^\/probe\/(\d+)\/(\d+)$/);
     if (probe) return json(response, 200, await probeMedia(probe[1], probe[2]));
+    const hls = url.pathname.match(
+      /^\/hls\/(\d+)\/(\d+)\/([a-z0-9-]+)\/(master\.m3u8|segment\d+\.ts)$/i,
+    );
+    if (hls) {
+      const [, id, file, token, asset] = hls;
+      let job = hlsJobs.get(token);
+      if (!job) {
+        if (asset !== "master.m3u8")
+          return json(response, 404, { error: "HLS session not found." });
+        if (jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
+          return json(response, 429, {
+            error: "The playback service is busy. Try again shortly.",
+          });
+        const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
+          audio = selectedStreamIndex(url.searchParams.get("audio")),
+          audioSync = url.searchParams.get("sync"),
+          quality = new Set(["480", "720", "1080", "original"]).has(
+            url.searchParams.get("quality"),
+          )
+            ? url.searchParams.get("quality")
+            : "480",
+          media = await probeMedia(id, file),
+          directory = join(tmpdir(), `kheyflix-hls-${token}`);
+        await mkdir(directory, { recursive: true });
+        const args = ["-hide_banner", "-loglevel", "error"];
+        if (start) args.push("-ss", String(start));
+        args.push(
+          "-readrate",
+          "1",
+          "-i",
+          inputFor(id, file),
+          "-map",
+          "0:v:0",
+          "-map",
+          `0:${audio}?`,
+          ...videoOutputOptions(
+            media.video[0]?.codec || "",
+            media.video[0]?.height || 0,
+            false,
+            quality,
+          ),
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          "-ac",
+          "2",
+          ...audioSyncOptions(audioSync),
+          "-sn",
+          "-force_key_frames",
+          "expr:gte(t,n_forced*4)",
+          "-f",
+          "hls",
+          "-hls_time",
+          "4",
+          "-hls_list_size",
+          "0",
+          "-hls_playlist_type",
+          "event",
+          "-hls_flags",
+          "independent_segments+temp_file",
+          "-hls_segment_filename",
+          join(directory, "segment%05d.ts"),
+          join(directory, "master.m3u8"),
+        );
+        const child = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
+        job = { child, directory, stderr: "" };
+        hlsJobs.set(token, job);
+        jobTouched.set(token, Date.now());
+        child.stderr.on("data", (chunk) => {
+          if (job.stderr.length < 16_000) job.stderr += chunk;
+        });
+        child.once("close", (code) => {
+          if (code && job.stderr)
+            console.error(`[hls] ${token} exited ${code}: ${job.stderr}`);
+        });
+      }
+      jobTouched.set(token, Date.now());
+      const path = join(job.directory, asset);
+      if (asset === "master.m3u8") await waitForPlaylist(path);
+      const details = await waitForFile(path, asset === "master.m3u8" ? 30_000 : 10_000);
+      const body = await readFile(path);
+      response.writeHead(200, {
+        "Content-Type": asset.endsWith(".m3u8")
+          ? "application/vnd.apple.mpegurl"
+          : "video/mp2t",
+        "Content-Length": String(details.size),
+        "Cache-Control": asset.endsWith(".m3u8")
+          ? "private, no-store"
+          : "private, max-age=60",
+      });
+      response.end(body);
+      return;
+    }
     const subtitle = url.pathname.match(
       /^\/subtitle\/(\d+)\/(\d+)\/(\d+)\.vtt$/,
     );
     if (subtitle) {
-      if (jobs.size + subtitleJobs.size >= MAX_JOBS)
+      if (jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
         return json(response, 429, {
           error: "The playback service is busy. Try again shortly.",
         });
@@ -222,7 +352,7 @@ const server = http.createServer(async (request, response) => {
     const token = url.searchParams.get("token") || crypto.randomUUID(),
       existing = jobs.get(token);
     if (existing && !existing.killed) existing.kill("SIGKILL");
-    if (!existing && jobs.size + subtitleJobs.size >= MAX_JOBS)
+    if (!existing && jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
       return json(response, 429, {
         error: "The playback service is busy. Try again shortly.",
       });
@@ -333,10 +463,7 @@ const leaseSweep = setInterval(() => {
   const expiredBefore = Date.now() - 60_000;
   for (const [token, touchedAt] of jobTouched) {
     if (touchedAt >= expiredBefore) continue;
-    const child = jobs.get(token);
-    if (child && !child.killed) child.kill("SIGKILL");
-    jobs.delete(token);
-    jobTouched.delete(token);
+    stopJob(token);
   }
 }, 15_000);
 leaseSweep.unref();
@@ -344,6 +471,10 @@ for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     clearInterval(leaseSweep);
     for (const child of jobs.values()) if (!child.killed) child.kill("SIGKILL");
+    for (const { child, directory } of hlsJobs.values()) {
+      if (!child.killed) child.kill("SIGKILL");
+      void rm(directory, { recursive: true, force: true });
+    }
     for (const child of subtitleJobs) if (!child.killed) child.kill("SIGKILL");
     server.close(() => process.exit(0));
   });
