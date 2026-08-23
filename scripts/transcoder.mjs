@@ -185,6 +185,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/health")
       return json(response, 200, {
         ok: true,
+        service: "kheyflix-transcoder",
         jobs: jobs.size + activeHlsJobs() + subtitleJobs.size,
         cachedBootstraps: Array.from(hlsJobs.values()).filter(
           (job) => job.cacheable && job.child.exitCode !== null,
