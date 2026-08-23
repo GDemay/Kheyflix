@@ -439,6 +439,15 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
+    if (!requiresMutedAutoplay(navigator.userAgent)) return;
+    if (video.current) {
+      video.current.muted = true;
+      video.current.volume = 0;
+    }
+    const frame = requestAnimationFrame(() => setVolume(0));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
     if (iosPlayback && source) window.location.replace(source);
   }, [iosPlayback, source]);
   useEffect(() => {
@@ -500,8 +509,9 @@ export default function StreamingPlayer({
         preload="auto"
         onLoadedMetadata={(event) => {
           if (!transcoded && offset > 0) event.currentTarget.currentTime = offset;
-          event.currentTarget.muted = volume === 0;
-          event.currentTarget.volume = volume;
+          const mobileAutoplay = requiresMutedAutoplay(navigator.userAgent);
+          event.currentTarget.muted = mobileAutoplay || volume === 0;
+          event.currentTarget.volume = mobileAutoplay ? 0 : volume;
           event.currentTarget.playbackRate = preferences.playbackRate;
           for (const track of event.currentTarget.textTracks)
             track.mode = "showing";
