@@ -29,9 +29,11 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     width: element.videoWidth,
     height: element.videoHeight,
     userAgent: navigator.userAgent,
+    vendor: navigator.vendor,
   }));
-  const ios = /(?:iPhone|iPad|iPod)/i.test(initial.userAgent) ||
-    (/Macintosh/i.test(initial.userAgent) && /Mobile/i.test(initial.userAgent));
+  const ios = /Apple/i.test(initial.vendor) &&
+    (/(?:iPhone|iPad|iPod)/i.test(initial.userAgent) ||
+      (/Macintosh/i.test(initial.userAgent) && /Mobile/i.test(initial.userAgent)));
   expect(initial.readyState).toBeGreaterThanOrEqual(2);
   expect(initial.width).toBeGreaterThanOrEqual(640);
   expect(initial.height).toBeGreaterThanOrEqual(360);
