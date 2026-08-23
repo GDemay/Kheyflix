@@ -20,6 +20,7 @@ const jobs = new Map(),
   probeRequests = new Map(),
   subtitleJobs = new Set();
 const MAX_JOBS = 4,
+  BOOTSTRAP_CACHE_TTL_MS = 10 * 60_000,
   MAX_PROBE_JOBS = 4,
   MAX_PROBES = 128,
   PROBE_TTL_MS = 30 * 60_000,
@@ -31,13 +32,16 @@ const MAX_JOBS = 4,
     "webvtt",
     "mov_text",
   ]);
+const activeHlsJobs = () =>
+  Array.from(hlsJobs.values()).filter((job) => job.child.exitCode === null).length;
 const inputFor = (id, file) => `${appOrigin}/api/debrid/stream/${id}/${file}`;
-const stopJob = (token) => {
+const stopJob = (token, force = false) => {
   const child = jobs.get(token);
   if (child && !child.killed) child.kill("SIGKILL");
   jobs.delete(token);
   const hls = hlsJobs.get(token);
   if (hls) {
+    if (hls.cacheable && !force) return;
     if (!hls.child.killed) hls.child.kill("SIGKILL");
     hlsJobs.delete(token);
     void rm(hls.directory, { recursive: true, force: true });
@@ -55,12 +59,12 @@ const waitForFile = async (path, timeout = 30_000) => {
   }
   throw new Error("The HLS stream did not become ready.");
 };
-const waitForPlaylist = async (path, timeout = 30_000) => {
+const waitForPlaylist = async (path, segments = 1, timeout = 30_000) => {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
       const body = await readFile(path, "utf8");
-      if ((body.match(/#EXTINF:/g) || []).length >= 3) return;
+      if ((body.match(/#EXTINF:/g) || []).length >= segments) return;
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -181,7 +185,10 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/health")
       return json(response, 200, {
         ok: true,
-        jobs: jobs.size + hlsJobs.size + subtitleJobs.size,
+        jobs: jobs.size + activeHlsJobs() + subtitleJobs.size,
+        cachedBootstraps: Array.from(hlsJobs.values()).filter(
+          (job) => job.cacheable && job.child.exitCode !== null,
+        ).length,
         probes: probeRequests.size,
       });
     const stop = url.pathname.match(/^\/stop\/([a-z0-9-]+)$/i);
@@ -208,26 +215,28 @@ const server = http.createServer(async (request, response) => {
       if (!job) {
         if (asset !== "master.m3u8")
           return json(response, 404, { error: "HLS session not found." });
-        if (jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
+        if (jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
           return json(response, 429, {
             error: "The playback service is busy. Try again shortly.",
           });
         const start = Math.max(0, Number(url.searchParams.get("start") || 0)),
           audio = selectedStreamIndex(url.searchParams.get("audio")),
           audioSync = url.searchParams.get("sync"),
-          quality = new Set(["480", "720", "1080", "original"]).has(
+          quality = new Set(["bootstrap", "480", "720", "1080", "original"]).has(
             url.searchParams.get("quality"),
           )
             ? url.searchParams.get("quality")
             : "480",
-          media = await probeMedia(id, file),
+          media =
+            quality === "bootstrap"
+              ? { video: [{ codec: "", height: 240 }] }
+              : await probeMedia(id, file),
           directory = join(tmpdir(), `kheyflix-hls-${token}`);
         await mkdir(directory, { recursive: true });
         const args = ["-hide_banner", "-loglevel", "error"];
         if (start) args.push("-ss", String(start));
+        if (quality !== "bootstrap") args.push("-readrate", "1");
         args.push(
-          "-readrate",
-          "1",
           "-i",
           inputFor(id, file),
           "-map",
@@ -243,17 +252,18 @@ const server = http.createServer(async (request, response) => {
           "-c:a",
           "aac",
           "-b:a",
-          "192k",
+          quality === "bootstrap" ? "64k" : "192k",
           "-ac",
-          "2",
+          quality === "bootstrap" ? "1" : "2",
           ...audioSyncOptions(audioSync),
           "-sn",
           "-force_key_frames",
-          "expr:gte(t,n_forced*4)",
+          `expr:gte(t,n_forced*${quality === "bootstrap" ? 1 : 2})`,
+          ...(quality === "bootstrap" ? ["-t", "30"] : []),
           "-f",
           "hls",
           "-hls_time",
-          "4",
+          quality === "bootstrap" ? "1" : "2",
           "-hls_list_size",
           "0",
           "-hls_playlist_type",
@@ -265,7 +275,7 @@ const server = http.createServer(async (request, response) => {
           join(directory, "master.m3u8"),
         );
         const child = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
-        job = { child, directory, stderr: "" };
+        job = { child, directory, stderr: "", cacheable: quality === "bootstrap" };
         hlsJobs.set(token, job);
         jobTouched.set(token, Date.now());
         child.stderr.on("data", (chunk) => {
@@ -278,7 +288,7 @@ const server = http.createServer(async (request, response) => {
       }
       jobTouched.set(token, Date.now());
       const path = join(job.directory, asset);
-      if (asset === "master.m3u8") await waitForPlaylist(path);
+      if (asset === "master.m3u8") await waitForPlaylist(path, 1);
       const details = await waitForFile(path, asset === "master.m3u8" ? 30_000 : 10_000);
       const body = await readFile(path);
       response.writeHead(200, {
@@ -297,7 +307,7 @@ const server = http.createServer(async (request, response) => {
       /^\/subtitle\/(\d+)\/(\d+)\/(\d+)\.vtt$/,
     );
     if (subtitle) {
-      if (jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
+      if (jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
         return json(response, 429, {
           error: "The playback service is busy. Try again shortly.",
         });
@@ -352,7 +362,7 @@ const server = http.createServer(async (request, response) => {
     const token = url.searchParams.get("token") || crypto.randomUUID(),
       existing = jobs.get(token);
     if (existing && !existing.killed) existing.kill("SIGKILL");
-    if (!existing && jobs.size + hlsJobs.size + subtitleJobs.size >= MAX_JOBS)
+    if (!existing && jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
       return json(response, 429, {
         error: "The playback service is busy. Try again shortly.",
       });
@@ -460,10 +470,12 @@ server.listen(port, "127.0.0.1", () =>
   console.log(`Kheyflix media compatibility service: http://127.0.0.1:${port}`),
 );
 const leaseSweep = setInterval(() => {
-  const expiredBefore = Date.now() - 60_000;
+  const now = Date.now();
   for (const [token, touchedAt] of jobTouched) {
-    if (touchedAt >= expiredBefore) continue;
-    stopJob(token);
+    const cacheable = hlsJobs.get(token)?.cacheable;
+    const ttl = cacheable ? BOOTSTRAP_CACHE_TTL_MS : 60_000;
+    if (now - touchedAt < ttl) continue;
+    stopJob(token, true);
   }
 }, 15_000);
 leaseSweep.unref();

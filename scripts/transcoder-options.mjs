@@ -1,6 +1,7 @@
 const BROWSER_SAFE_VIDEO_CODECS = new Set(["h264"]);
 
 const PROFILES = {
+  bootstrap: { height: 240, bitrate: "280k", maxrate: "420k", bufsize: "840k" },
   "480": { height: 480, bitrate: "900k", maxrate: "1200k", bufsize: "2400k" },
   "720": { height: 720, bitrate: "2200k", maxrate: "3000k", bufsize: "6000k" },
   "1080": { height: 1080, bitrate: "4500k", maxrate: "6000k", bufsize: "12000k" },

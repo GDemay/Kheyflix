@@ -69,6 +69,11 @@ type MediaInfo = {
 const PROGRESS_KEY = "kheyflix:progress:v1",
   QUEUE_KEY = "kheyflix:playback-queue:v1",
   PREFERENCES_KEY = "kheyflix:playback-preferences:v1";
+const newSessionToken = () => {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+};
 const formatTime = (value: number) =>
   Number.isFinite(value)
     ? `${Math.floor(value / 3600) ? `${Math.floor(value / 3600)}:` : ""}${Math.floor(
@@ -130,6 +135,9 @@ export default function StreamingPlayer({
     lastSaved = useRef(0),
     lastQualitySwitch = useRef(0),
     startupRetries = useRef(0),
+    playbackRequestedAt = useRef(0),
+    firstFrameRecorded = useRef(false),
+    pendingSwitchTime = useRef<number | undefined>(undefined),
     mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
@@ -168,8 +176,22 @@ export default function StreamingPlayer({
     [copyCompatibleVideo, setCopyCompatibleVideo] = useState(false),
     [qualityMode, setQualityMode] = useState<QualityMode>("auto"),
     [rendition, setRendition] = useState<RenditionQuality>("480"),
-    [offset, setOffset] = useState(0),
-    [session, setSession] = useState(() => crypto.randomUUID()),
+    [offset, setOffset] = useState(() => {
+      try {
+        return resumePosition(
+          findWatchProgress(
+            parseWatchProgress(localStorage.getItem(PROGRESS_KEY)),
+            identity,
+          ),
+        );
+      } catch {
+        return 0;
+      }
+    }),
+    [session, setSession] = useState(newSessionToken),
+    [upgradeSession] = useState(newSessionToken),
+    [bootstrap, setBootstrap] = useState(iosPlayback),
+    [firstFrameMs, setFirstFrameMs] = useState<number>(),
     [audio, setAudio] = useState<number>(),
     [subtitle, setSubtitle] = useState<number>(),
     [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">(
@@ -194,13 +216,18 @@ export default function StreamingPlayer({
     [controls, setControls] = useState(true),
     [intro, setIntro] = useState(true);
   const transcoded = compatible || rendition !== "original",
+    activeQuality = bootstrap ? "bootstrap" : rendition,
+    playbackOffset = bootstrap ? Math.floor(offset / 30) * 30 : offset,
+    activeSession = bootstrap
+      ? `bootstrap-${id}-${file}-${playbackOffset}`
+      : session,
     sourceHeight = info?.video[0]?.height || 0,
     duration = info?.duration || nativeDuration,
-    absoluteTime = transcoded ? offset + localTime : localTime,
+    absoluteTime = transcoded ? playbackOffset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
-  const source = mediaReady
+  const source = mediaReady || (iosPlayback && bootstrap)
     ? iosPlayback && transcoded
-      ? `/api/debrid/hls/${id}/${file}/${session}/master.m3u8?start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`
+      ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${bootstrap ? "" : `&sync=${preferences.audioSync}`}`
       : transcoded
       ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
@@ -270,7 +297,7 @@ export default function StreamingPlayer({
       setAudio(nextAudio);
       setRendition(nextQuality);
       lastQualitySwitch.current = Date.now();
-      setSession(crypto.randomUUID());
+      setSession(newSessionToken());
     },
     [audio, duration, persist, rendition, stop],
   );
@@ -319,6 +346,7 @@ export default function StreamingPlayer({
   const restartRef = useRef(restart),
     absoluteTimeRef = useRef(absoluteTime);
   useEffect(() => {
+    playbackRequestedAt.current = performance.now();
     const timer = setTimeout(() => setIntro(false), 1800);
     return () => clearTimeout(timer);
   }, []);
@@ -327,7 +355,7 @@ export default function StreamingPlayer({
     absoluteTimeRef.current = absoluteTime;
   }, [absoluteTime, restart]);
   useEffect(() => {
-    if (!mediaReady || !loading || error) return;
+    if ((!mediaReady && !bootstrap) || !loading || error) return;
     const timer = setTimeout(
       () => {
         const recovery = startupRecovery(transcoded, startupRetries.current);
@@ -342,7 +370,7 @@ export default function StreamingPlayer({
         });
         if (recovery === "fallback") {
           setCompatible(true);
-          setSession(crypto.randomUUID());
+          setSession(newSessionToken());
         } else if (recovery === "retry") {
           startupRetries.current += 1;
           restartRef.current(absoluteTimeRef.current);
@@ -358,14 +386,14 @@ export default function StreamingPlayer({
         : NATIVE_STARTUP_TIMEOUT_MS,
     );
     return () => clearTimeout(timer);
-  }, [error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
+  }, [bootstrap, error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
   }, [persist, stop]);
   useEffect(() => {
     if (!transcoded) return;
-    const token = session,
+    const token = activeSession,
       touch = () =>
         void fetch(`/api/debrid/transcode/${id}/${file}?session=${token}`, {
           method: "PATCH",
@@ -377,7 +405,7 @@ export default function StreamingPlayer({
       clearInterval(timer);
       stop(token);
     };
-  }, [file, id, session, stop, transcoded]);
+  }, [activeSession, file, id, stop, transcoded]);
   useEffect(() => {
     const request = mediaRequests.current.begin();
     const controller = new AbortController();
@@ -443,6 +471,37 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
+    if (!bootstrap || !playing || !mediaReady) return;
+    const token = upgradeSession;
+    const standardSource = `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`;
+    let cancelled = false;
+    console.info("[playback] preparing standard stream", { id, file, rendition });
+    void fetch(standardSource)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.text();
+      })
+      .then(() => {
+        if (cancelled || !video.current) return;
+        pendingSwitchTime.current = Math.max(
+          0,
+          playbackOffset + video.current.currentTime - offset,
+        );
+        console.info("[playback] switching from bootstrap", {
+          elapsed: pendingSwitchTime.current,
+          rendition,
+        });
+        setSession(token);
+        setBootstrap(false);
+      })
+      .catch((reason) =>
+        console.warn("[playback] standard stream prewarm failed", reason),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [audio, bootstrap, file, id, mediaReady, offset, playbackOffset, playing, preferences.audioSync, rendition, upgradeSession]);
+  useEffect(() => {
     const element = video.current;
     if (!iosPlayback || !source || !element || !Hls.isSupported()) return;
     const hls = new Hls({
@@ -453,6 +512,12 @@ export default function StreamingPlayer({
     hls.loadSource(source);
     hls.attachMedia(element);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (bootstrap && offset > playbackOffset)
+        element.currentTime = offset - playbackOffset;
+      if (!bootstrap && pendingSwitchTime.current !== undefined) {
+        element.currentTime = pendingSwitchTime.current;
+        pendingSwitchTime.current = undefined;
+      }
       element.muted = true;
       element.volume = 0;
       void element.play().catch(() => setControls(true));
@@ -465,7 +530,7 @@ export default function StreamingPlayer({
       });
     });
     return () => hls.destroy();
-  }, [iosPlayback, source]);
+  }, [bootstrap, iosPlayback, offset, playbackOffset, source]);
   useEffect(() => {
     if (!requiresMutedAutoplay(navigator.userAgent)) return;
     if (video.current) {
@@ -476,10 +541,10 @@ export default function StreamingPlayer({
     return () => cancelAnimationFrame(frame);
   }, []);
   useEffect(() => {
-    if (qualityMode !== "auto" || !playing || loading) return;
+    if (iosPlayback || qualityMode !== "auto" || !playing || loading) return;
     const timer = setTimeout(() => adaptQuality("up"), 25_000);
     return () => clearTimeout(timer);
-  }, [adaptQuality, loading, playing, qualityMode, rendition]);
+  }, [adaptQuality, iosPlayback, loading, playing, qualityMode, rendition]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -520,12 +585,14 @@ export default function StreamingPlayer({
   return (
     <main
       className={`player-shell ${controls || !playing ? "controls-visible" : ""} subtitle-${subtitleSize}`}
+      data-playback-phase={bootstrap ? "bootstrap" : "standard"}
+      data-playback-quality={activeQuality}
+      data-first-frame-ms={firstFrameMs === undefined ? undefined : Math.round(firstFrameMs)}
       ref={shell}
       onMouseMove={showControls}
       onClick={showControls}
     >
       <video
-        key={source}
         ref={video}
         src={iosPlayback && Hls.isSupported() ? undefined : source}
         autoPlay
@@ -588,6 +655,23 @@ export default function StreamingPlayer({
           startupRetries.current = 0;
           setPlaying(true);
           setLoading(false);
+          const element = video.current;
+          if (!firstFrameRecorded.current && element) {
+            const record = () => {
+              if (firstFrameRecorded.current) return;
+              firstFrameRecorded.current = true;
+              const elapsed = performance.now() - playbackRequestedAt.current;
+              setFirstFrameMs(elapsed);
+              console.info("[playback] first frame", {
+                milliseconds: Math.round(elapsed),
+                phase: bootstrap ? "bootstrap" : "standard",
+                quality: activeQuality,
+              });
+            };
+            if ("requestVideoFrameCallback" in element)
+              element.requestVideoFrameCallback(record);
+            else requestAnimationFrame(record);
+          }
         }}
         onEnded={() => {
           persist(duration);
@@ -607,7 +691,7 @@ export default function StreamingPlayer({
           });
           if (!transcoded) {
             setCompatible(true);
-            setSession(crypto.randomUUID());
+            setSession(newSessionToken());
           } else if (qualityMode === "auto" && rendition === "480" && !compatible) {
             restart(absoluteTime, audio, "original");
           } else {

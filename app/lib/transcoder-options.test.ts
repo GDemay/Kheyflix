@@ -40,6 +40,7 @@ describe("compatible playback transcoder options", () => {
   });
 
   it.each([
+    ["bootstrap", "scale=-2:240", "280k"],
     ["480", "scale=-2:480", "900k"],
     ["720", "scale=-2:720", "2200k"],
     ["1080", "scale=-2:1080", "4500k"],

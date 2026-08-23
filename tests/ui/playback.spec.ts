@@ -20,6 +20,17 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     })
     .toBeGreaterThanOrEqual(2);
   await expect(page.getByRole("status")).toBeHidden({ timeout: 30_000 });
+  await expect
+    .poll(
+      () => page.locator("main.player-shell").getAttribute("data-first-frame-ms"),
+      { timeout: 15_000 },
+    )
+    .not.toBeNull();
+  const firstFrameMs = Number(
+    await page.locator("main.player-shell").getAttribute("data-first-frame-ms"),
+  );
+  console.info(`[playback] first decoded frame: ${firstFrameMs}ms`);
+  expect(firstFrameMs).toBeLessThan(10_000);
 
   const initial = await video.evaluate((element) => ({
     muted: element.muted,
