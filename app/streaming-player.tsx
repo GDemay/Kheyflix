@@ -29,7 +29,13 @@ import {
   nextAutoQuality,
   QualityMode,
   RenditionQuality,
+  requiresMutedAutoplay,
 } from "./lib/playback";
+import {
+  COMPATIBLE_STARTUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  startupRecovery,
+} from "./lib/playback-recovery";
 import {
   defaultPlaybackPreferences,
   parsePlaybackPreferences,
@@ -120,7 +126,8 @@ export default function StreamingPlayer({
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
     lastSaved = useRef(0),
-    lastQualitySwitch = useRef(0);
+    lastQualitySwitch = useRef(0),
+    startupRetries = useRef(0);
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
         return JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
@@ -163,8 +170,14 @@ export default function StreamingPlayer({
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
     [nativeDuration, setNativeDuration] = useState(0),
-    [volume, setVolume] = useState(1),
+    [volume, setVolume] = useState(() =>
+      typeof navigator !== "undefined" &&
+      requiresMutedAutoplay(navigator.userAgent)
+        ? 0
+        : 1,
+    ),
     [loading, setLoading] = useState(true),
+    [error, setError] = useState(false),
     [controls, setControls] = useState(true),
     [intro, setIntro] = useState(true);
   const transcoded = compatible || rendition !== "original",
@@ -235,6 +248,8 @@ export default function StreamingPlayer({
       const target = Math.max(0, Math.min(duration || at, at));
       persist(target);
       stop();
+      setLoading(true);
+      setError(false);
       setLocalTime(0);
       setOffset(target);
       setAudio(nextAudio);
@@ -286,10 +301,47 @@ export default function StreamingPlayer({
     },
     [absoluteTime, audio, qualityMode, rendition, restart, sourceHeight],
   );
+  const restartRef = useRef(restart),
+    absoluteTimeRef = useRef(absoluteTime);
   useEffect(() => {
     const timer = setTimeout(() => setIntro(false), 1800);
     return () => clearTimeout(timer);
   }, []);
+  useEffect(() => {
+    restartRef.current = restart;
+    absoluteTimeRef.current = absoluteTime;
+  }, [absoluteTime, restart]);
+  useEffect(() => {
+    if (!mediaReady || !loading || error) return;
+    const timer = setTimeout(
+      () => {
+        const recovery = startupRecovery(transcoded, startupRetries.current);
+        console.warn("[playback] startup timeout", {
+          id,
+          file,
+          transcoded,
+          rendition,
+          recovery,
+          readyState: video.current?.readyState,
+          networkState: video.current?.networkState,
+        });
+        if (recovery === "fallback") {
+          setCompatible(true);
+          setSession(crypto.randomUUID());
+        } else if (recovery === "retry") {
+          startupRetries.current += 1;
+          restartRef.current(absoluteTimeRef.current);
+        } else {
+          setLoading(false);
+          setError(true);
+        }
+      },
+      transcoded
+        ? COMPATIBLE_STARTUP_TIMEOUT_MS
+        : NATIVE_STARTUP_TIMEOUT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [error, file, id, loading, mediaReady, rendition, session, transcoded]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
@@ -417,11 +469,12 @@ export default function StreamingPlayer({
         ref={video}
         src={source}
         autoPlay
+        muted={volume === 0}
         playsInline
         preload="auto"
         onLoadedMetadata={(event) => {
           if (!transcoded && offset > 0) event.currentTarget.currentTime = offset;
-          event.currentTarget.muted = false;
+          event.currentTarget.muted = volume === 0;
           event.currentTarget.volume = volume;
           event.currentTarget.playbackRate = preferences.playbackRate;
           for (const track of event.currentTarget.textTracks)
@@ -455,12 +508,16 @@ export default function StreamingPlayer({
             setNativeDuration(event.currentTarget.duration);
         }}
         onLoadedData={() => setLoading(false)}
-        onCanPlay={() => setLoading(false)}
+        onCanPlay={() => {
+          startupRetries.current = 0;
+          setLoading(false);
+        }}
         onWaiting={() => {
           setLoading(true);
           adaptQuality("down");
         }}
         onPlaying={() => {
+          startupRetries.current = 0;
           setPlaying(true);
           setLoading(false);
         }}
@@ -468,12 +525,26 @@ export default function StreamingPlayer({
           persist(duration);
           setPlaying(false);
         }}
-        onError={() => {
+        onError={(event) => {
+          const element = event.currentTarget;
+          console.error("[playback] media error", {
+            id,
+            file,
+            transcoded,
+            rendition,
+            code: element.error?.code,
+            message: element.error?.message,
+            readyState: element.readyState,
+            networkState: element.networkState,
+          });
           if (!transcoded) {
             setCompatible(true);
             setSession(crypto.randomUUID());
           } else if (qualityMode === "auto" && rendition === "480" && !compatible) {
             restart(absoluteTime, audio, "original");
+          } else {
+            setLoading(false);
+            setError(true);
           }
         }}
       >
@@ -496,10 +567,26 @@ export default function StreamingPlayer({
           <strong>KHEYFLIX</strong>
         </div>
       )}
-      {loading && (
+      {loading && !error && (
         <div className="buffering" role="status">
           <span />
           <p>Loading video…</p>
+        </div>
+      )}
+      {error && (
+        <div className="playback-error" role="alert">
+          <h1>We couldn’t start playback</h1>
+          <p>The stream did not become playable. Your place has been saved.</p>
+          <div>
+            <button onClick={() => restart(absoluteTime)}>
+              <RotateCcw />
+              Retry
+            </button>
+            <button onClick={safeBack}>
+              <ArrowLeft />
+              Back
+            </button>
+          </div>
         </div>
       )}
       <div className="player-top">

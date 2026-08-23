@@ -33,3 +33,7 @@ export const needsCompatiblePlayback = (
 ) =>
   /(?:^|,)matroska(?:,|$)|(?:^|,)webm(?:,|$)/i.test(format) ||
   needsCompatibleAudio(audioCodec);
+
+export const requiresMutedAutoplay = (userAgent = "") =>
+  /(?:iPhone|iPad|iPod)/i.test(userAgent) ||
+  (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent));

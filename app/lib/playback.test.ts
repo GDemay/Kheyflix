@@ -4,6 +4,7 @@ import {
   needsCompatibleAudio,
   needsCompatiblePlayback,
   nextAutoQuality,
+  requiresMutedAutoplay,
 } from "./playback";
 
 describe("playback compatibility", () => {
@@ -29,6 +30,22 @@ describe("playback compatibility", () => {
     expect(needsCompatiblePlayback("mov,mp4,m4a,3gp,3g2,mj2", "aac")).toBe(
       false,
     );
+  });
+
+  it.each([
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+    "Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X)",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Mobile/15E148",
+  ])("uses muted autoplay on iOS WebKit", (userAgent) => {
+    expect(requiresMutedAutoplay(userAgent)).toBe(true);
+  });
+
+  it("does not mute autoplay on desktop browsers", () => {
+    expect(
+      requiresMutedAutoplay(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/140",
+      ),
+    ).toBe(false);
   });
 
   it("builds a quality ladder without upscaling the source", () => {

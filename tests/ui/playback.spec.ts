@@ -4,7 +4,7 @@ const playbackPath =
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
   "/stream/514397162/2/smiling-friends-s01-e04-episode-4";
 
-test("a real movie starts with sound and keeps streaming", async ({ page }) => {
+test("a real movie starts and keeps streaming", async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
@@ -28,15 +28,17 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
     readyState: element.readyState,
     width: element.videoWidth,
     height: element.videoHeight,
+    userAgent: navigator.userAgent,
   }));
-  expect(initial.muted).toBe(false);
-  expect(initial.volume).toBe(1);
+  const ios = /(?:iPhone|iPad|iPod)/i.test(initial.userAgent) ||
+    (/Macintosh/i.test(initial.userAgent) && /Mobile/i.test(initial.userAgent));
+  expect(initial.muted).toBe(ios);
+  expect(initial.volume).toBe(ios ? 0 : 1);
   expect(initial.readyState).toBeGreaterThanOrEqual(2);
   expect(initial.width).toBeGreaterThanOrEqual(640);
   expect(initial.height).toBeGreaterThanOrEqual(360);
 
-  // Audible autoplay is forbidden by some mobile browsers. In that case the
-  // required user gesture must start playback unmuted on the first tap.
+  // Desktop browsers may still require an explicit gesture for audible video.
   if (initial.paused) {
     await page.getByRole("button", { name: "Play", exact: true }).click();
   }
@@ -48,6 +50,11 @@ test("a real movie starts with sound and keeps streaming", async ({ page }) => {
       { timeout: 15_000 },
     )
     .toBeGreaterThan(start + 3);
+
+  if (ios) {
+    await page.getByRole("button", { name: "Unmute" }).click();
+    await expect.poll(() => video.evaluate((element) => element.muted)).toBe(false);
+  }
 
   const checkpoints: number[] = [];
   for (let sample = 0; sample < 4; sample += 1) {
