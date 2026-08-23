@@ -351,12 +351,14 @@ export default function StreamingPlayer({
           setError(true);
         }
       },
-      transcoded
+      iosPlayback
+        ? 90_000
+        : transcoded
         ? COMPATIBLE_STARTUP_TIMEOUT_MS
         : NATIVE_STARTUP_TIMEOUT_MS,
     );
     return () => clearTimeout(timer);
-  }, [error, file, id, loading, mediaReady, rendition, session, transcoded]);
+  }, [error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
