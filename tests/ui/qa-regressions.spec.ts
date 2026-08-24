@@ -15,6 +15,52 @@ test("search state survives result navigation and browser history", async ({ pag
   await expect(page).toHaveURL(/\/debrid\//);
 });
 
+test("player back returns directly to browsing without reopening title details", async ({ page }) => {
+  await page.route("**/api/debrid/magnets*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        magnets: [{
+          id: 90,
+          filename: "Heroes S01",
+          statusCode: 4,
+          videoFiles: [{
+            index: 3,
+            name: "Heroes.S01E04.Collision.mkv",
+            size: 1_000_000_000,
+            path: "",
+          }],
+        }],
+      }),
+    });
+  });
+  await page.route("**/api/metadata*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ metadata: null, cached: false }),
+    });
+  });
+  await page.goto("/search?q=heroes", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button").filter({ hasText: "Heroes" }).first().click();
+  await expect(page.getByRole("dialog", { name: "Heroes" })).toBeVisible();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(page).toHaveURL(/\/stream\//);
+
+  await page.getByRole("button", { name: "Back to browsing" }).click();
+
+  await expect(page).toHaveURL(/\/search\?q=heroes$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByLabel("Search titles")).toHaveValue("heroes");
+
+  await page.goBack();
+  await expect(page.getByRole("dialog", { name: "Heroes" })).toBeVisible();
+  await page.getByRole("button", { name: "Close title details" }).click();
+  await expect(page).toHaveURL(/\/search\?q=heroes$/);
+  await expect(page.locator("main.player-shell")).toHaveCount(0);
+});
+
 test("invalid watch routes provide an explicit recovery path", async ({ page }) => {
   await page.goto("/watch/not-real", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Title not found" })).toBeVisible();

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { PlaybackRequestGate, playbackReturnRoute } from "./player-navigation";
+import {
+  playbackExitRoute,
+  PlaybackRequestGate,
+  playbackReturnRoute,
+} from "./player-navigation";
 
 describe("player navigation races", () => {
   it("keeps the browsing destination while advancing between episodes", () => {
@@ -15,6 +19,15 @@ describe("player navigation races", () => {
     const afterNext = playbackReturnRoute(afterOpening, episode1, episode2);
 
     expect(afterNext).toEqual(details);
+  });
+
+  it("exits playback to the recorded browsing path instead of title details", () => {
+    expect(
+      playbackExitRoute(
+        "/search?q=heroes",
+        { section: "debrid", id: "heroes" },
+      ),
+    ).toEqual({ section: "search", query: "heroes" });
   });
 
   it("invalidates playback preparation when navigation leaves the player", () => {
