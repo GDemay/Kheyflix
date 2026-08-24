@@ -265,6 +265,7 @@ export default function StreamingPlayer({
     video = useRef<HTMLVideoElement>(null),
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
+    lastPointer = useRef<{ x: number; y: number } | undefined>(undefined),
     lastSaved = useRef(0),
     startupRetries = useRef(0),
     playbackRequestedAt = useRef(0),
@@ -807,7 +808,16 @@ export default function StreamingPlayer({
       data-playback-quality={activeQuality}
       data-first-frame-ms={firstFrameMs === undefined ? undefined : Math.round(firstFrameMs)}
       ref={shell}
-      onMouseMove={showControls}
+      onMouseMove={(event) => {
+        const pointer = { x: event.clientX, y: event.clientY };
+        if (
+          lastPointer.current?.x === pointer.x &&
+          lastPointer.current?.y === pointer.y
+        )
+          return;
+        lastPointer.current = pointer;
+        showControls();
+      }}
       onClick={showControls}
     >
       <video
