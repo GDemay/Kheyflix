@@ -117,6 +117,7 @@ export default function DiscoveryPage({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchCompleted, setSearchCompleted] = useState(false);
   const [error, setError] = useState("");
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [preparations, setPreparations] = useState<Record<string, Preparation>>({});
@@ -172,6 +173,7 @@ export default function DiscoveryPage({
     if (term.length < 2) return;
     const requestId = clientRequestId();
     setSearching(true);
+    setSearchCompleted(false);
     setError("");
     try {
       const parameters = new URLSearchParams({ q: term, kind: searchKind });
@@ -189,6 +191,7 @@ export default function DiscoveryPage({
         throw new ApiRequestError(failure);
       }
       setResults(data.results || []);
+      setSearchCompleted(true);
       reportClientEvent("discovery.search.completed", {
         kind: searchKind,
         resultCount: data.results?.length || 0,
@@ -204,6 +207,7 @@ export default function DiscoveryPage({
         ? undefined
         : reportUnexpectedClientFailure("discovery.search", reason, requestId);
       setResults([]);
+      setSearchCompleted(false);
       const message = reason instanceof RequestTimeoutError
           ? "Search timed out. Check your connection and try again."
           : reason instanceof Error ? reason.message : "Search is unavailable.";
@@ -381,15 +385,15 @@ export default function DiscoveryPage({
         <h1>Find it. Get it ready. Press play.</h1>
         <span>Search connected sources and prepare authorized titles for your Kheyflix library.</span>
         <div className="discovery-kind" role="group" aria-label="Content type">
-          <button type="button" className={searchKind === "movie" ? "active" : ""} onClick={() => { setSearchKind("movie"); setRequestedSeason(""); setRequestedEpisode(""); }}><Film /> Movies</button>
-          <button type="button" className={searchKind === "series" ? "active" : ""} onClick={() => setSearchKind("series")}><Tv /> Series</button>
+          <button type="button" className={searchKind === "movie" ? "active" : ""} onClick={() => { setSearchKind("movie"); setSearchCompleted(false); setRequestedSeason(""); setRequestedEpisode(""); }}><Film /> Movies</button>
+          <button type="button" className={searchKind === "series" ? "active" : ""} onClick={() => { setSearchKind("series"); setSearchCompleted(false); }}><Tv /> Series</button>
         </div>
         <form onSubmit={search} className="discovery-search">
           <Search />
           <input
             autoFocus
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setSearchCompleted(false); }}
             placeholder="Search a movie, series, season or episode"
             aria-label="Search connected sources"
           />
@@ -418,8 +422,15 @@ export default function DiscoveryPage({
       </div>
 
       {error && <div className="discovery-message error" role="alert"><CircleAlert aria-hidden="true" /><span>{error}</span><button type="button" onClick={() => void runSearch(query.trim())} disabled={query.trim().length < 2}>Try again</button></div>}
-      {!searching && !error && results.length === 0 && query && (
+      {!searching && !error && results.length === 0 && query && !searchCompleted && (
         <div className="discovery-message"><Search />Search to see available releases.</div>
+      )}
+      {!searching && !error && results.length === 0 && searchCompleted && (
+        <div className="discovery-message" role="status">
+          <Search />
+          <span>No playable {searchKind} releases were found.</span>
+          <span>Try another title or switch to {searchKind === "movie" ? "Series" : "Movies"}.</span>
+        </div>
       )}
       {results.length > 0 && (
         <div className="discovery-filters" aria-label="Result filters">

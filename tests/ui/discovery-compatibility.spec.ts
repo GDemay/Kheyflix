@@ -237,3 +237,17 @@ test("a network failure during preparation has a client-generated trace referenc
   await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
   expect(browserErrors.some((message) => message.includes(requestId))).toBe(true);
 });
+
+test("an empty video search explains that no playable release was found", async ({ page }) => {
+  await page.route("**/api/discovery/search?*", (route) => route.fulfill({
+    json: { results: [] },
+  }));
+
+  await page.goto("/discover");
+  await page.getByLabel("Search connected sources").fill("Pokemon");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+
+  await expect(page.getByText("No playable movie releases were found.")).toBeVisible();
+  await expect(page.getByText("Try another title or switch to Series.")).toBeVisible();
+  await expect(page.getByText("Search to see available releases.")).toHaveCount(0);
+});
