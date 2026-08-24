@@ -10,6 +10,9 @@ export const availableQualities = (sourceHeight = 0): RenditionQuality[] =>
     quality === "original" ? true : !sourceHeight || Number(quality) <= sourceHeight,
   );
 
+export const bestAutoQuality = (sourceHeight = 0): RenditionQuality =>
+  sourceHeight > 0 ? "original" : "480";
+
 export const nextAutoQuality = (
   current: RenditionQuality,
   direction: "up" | "down",

@@ -70,12 +70,54 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   const checkpoints: number[] = [];
   for (let sample = 0; sample < 4; sample += 1) {
     await page.waitForTimeout(5_000);
-    checkpoints.push(await video.evaluate((element) => element.currentTime));
+    checkpoints.push(
+      Number(await page.getByRole("slider", { name: "Seek video" }).inputValue()),
+    );
     await expect(page.getByRole("alert")).toHaveCount(0);
   }
   expect(checkpoints.at(-1)! - checkpoints[0]).toBeGreaterThan(12);
+  await expect
+    .poll(
+      () => page.locator("main.player-shell").getAttribute("data-playback-quality"),
+      { timeout: 20_000 },
+    )
+    .toBe("original");
+
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  const paused = page.getByLabel("Playback paused");
+  await expect(paused).toBeVisible();
+  await expect(paused.getByRole("button", { name: "Play" })).toBeVisible();
+  await expect(
+    paused.getByRole("button", { name: "Back 10 seconds" }),
+  ).toBeVisible();
+  await expect(
+    paused.getByRole("button", { name: "Forward 10 seconds" }),
+  ).toBeVisible();
+  await expect(page.locator(".shard-portal-loader")).toHaveCount(0);
+  const pausedAt = await video.evaluate((element) => element.currentTime);
+  await paused.getByRole("button", { name: "Forward 10 seconds" }).click();
+  await expect
+    .poll(
+      () =>
+        page
+          .getByRole("slider", { name: "Seek video" })
+          .inputValue()
+          .then(Number),
+      {
+      timeout: 30_000,
+      },
+    )
+    .toBeGreaterThan(pausedAt + 8);
+  await expect(page.locator(".shard-portal-loader")).toHaveCount(0);
+  await page.getByLabel("Playback paused").getByRole("button", { name: "Play" }).click();
 
   await expect(page.getByRole("button", { name: "Audio languages" })).toBeVisible();
+  await page.getByRole("button", { name: "Audio languages" }).click();
+  const audioMenu = page.getByRole("dialog", { name: "Audio languages" });
+  await expect(audioMenu.getByRole("button", { name: /English/ })).toHaveClass(
+    /active/,
+  );
+  await page.getByRole("button", { name: "Audio languages" }).click();
   await expect(page.getByRole("button", { name: "Subtitles" })).toBeVisible();
   await page.getByRole("button", { name: "Subtitles" }).click();
   await expect(page.getByRole("dialog", { name: "Subtitles" })).toBeVisible();
@@ -104,6 +146,7 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await expect(
     settings.getByRole("button", { name: "480p Data saver" }),
   ).toHaveClass(/active/);
+  await expect(page.locator(".shard-portal-loader")).toHaveCount(0);
   await page.getByRole("button", { name: "Playback settings" }).click();
   await expect
     .poll(() => video.evaluate((element) => element.readyState), {

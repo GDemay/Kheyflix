@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   availableQualities,
+  bestAutoQuality,
   needsCompatibleAudio,
   needsCompatiblePlayback,
   nextAutoQuality,
@@ -58,5 +59,11 @@ describe("playback compatibility", () => {
     expect(nextAutoQuality("720", "down", 1080)).toBe("480");
     expect(nextAutoQuality("1080", "up", 1080)).toBe("original");
     expect(nextAutoQuality("480", "down", 1080)).toBe("480");
+  });
+
+  it("upgrades Auto directly from startup quality to the best source quality", () => {
+    expect(bestAutoQuality(2160)).toBe("original");
+    expect(bestAutoQuality(720)).toBe("original");
+    expect(bestAutoQuality(0)).toBe("480");
   });
 });

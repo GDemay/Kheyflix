@@ -26,6 +26,7 @@ import {
 } from "./lib/watch-progress";
 import {
   availableQualities,
+  bestAutoQuality,
   needsCompatiblePlayback,
   nextAutoQuality,
   QualityMode,
@@ -39,6 +40,7 @@ import {
 } from "./lib/playback-recovery";
 import {
   defaultPlaybackPreferences,
+  chooseAudioTrack,
   parsePlaybackPreferences,
   PlaybackPreferences,
   serializePlaybackPreferences,
@@ -72,7 +74,8 @@ type MediaInfo = {
 };
 const PROGRESS_KEY = "kheyflix:progress:v1",
   QUEUE_KEY = "kheyflix:playback-queue:v1",
-  PREFERENCES_KEY = "kheyflix:playback-preferences:v1";
+  PREFERENCES_KEY = "kheyflix:playback-preferences:v1",
+  AUDIO_LANGUAGE_KEY = "kheyflix:audio-language:v1";
 const newSessionToken = () => {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -91,7 +94,10 @@ const formatTime = (value: number) =>
 const languageName = (code: string, title = "") =>
   title ||
   {
+    en: "English",
     eng: "English",
+    pt: "Português",
+    por: "Português",
     fra: "Français",
     fre: "Français",
     ita: "Italiano",
@@ -265,6 +271,8 @@ export default function StreamingPlayer({
     startupRetries = useRef(0),
     playbackRequestedAt = useRef(0),
     firstFrameRecorded = useRef(false),
+    autoUpgradeRequested = useRef(false),
+    userPaused = useRef(false),
     pendingSwitchTime = useRef<number | undefined>(undefined),
     mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
@@ -318,7 +326,7 @@ export default function StreamingPlayer({
     }),
     [session, setSession] = useState(newSessionToken),
     [upgradeSession] = useState(newSessionToken),
-    [bootstrap, setBootstrap] = useState(iosPlayback),
+    [bootstrap, setBootstrap] = useState(true),
     [firstFrameMs, setFirstFrameMs] = useState<number>(),
     [audio, setAudio] = useState<number>(),
     [subtitle, setSubtitle] = useState<number>(),
@@ -330,6 +338,8 @@ export default function StreamingPlayer({
       "audio" | "subtitles" | "settings" | null
     >(null),
     [playing, setPlaying] = useState(false),
+    [pausedByUser, setPausedByUser] = useState(false),
+    [startedPlayback, setStartedPlayback] = useState(false),
     [localTime, setLocalTime] = useState(0),
     [scrub, setScrub] = useState<number>(),
     [nativeDuration, setNativeDuration] = useState(0),
@@ -359,7 +369,7 @@ export default function StreamingPlayer({
     ? iosPlayback && transcoded
       ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${bootstrap ? "" : `&sync=${preferences.audioSync}`}`
       : transcoded
-      ? `/api/debrid/transcode/${id}/${file}?session=${session}&start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
+      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
   const playbackTitle = currentQueue?.seriesTitle
@@ -412,8 +422,15 @@ export default function StreamingPlayer({
   const toggle = useCallback(() => {
     const element = video.current;
     if (!element) return;
-    if (element.paused) void element.play().catch(() => undefined);
-    else element.pause();
+    if (element.paused) {
+      userPaused.current = false;
+      setPausedByUser(false);
+      void element.play().catch(() => undefined);
+    } else {
+      userPaused.current = true;
+      setPausedByUser(true);
+      element.pause();
+    }
   }, []);
   const restart = useCallback(
     (at: number, nextAudio = audio, nextQuality = rendition) => {
@@ -592,9 +609,13 @@ export default function StreamingPlayer({
         const savedPreferences = parsePlaybackPreferences(
           localStorage.getItem(`${PREFERENCES_KEY}:${preferenceKey}`),
         );
+        const savedAudioLanguage =
+          localStorage.getItem(AUDIO_LANGUAGE_KEY) ||
+          savedPreferences.audioLanguage ||
+          "eng";
+        savedPreferences.audioLanguage = savedAudioLanguage;
         setPreferences(savedPreferences);
-        const selected =
-          value.audio.find((track) => track.default) || value.audio[0];
+        const selected = chooseAudioTrack(value.audio, savedAudioLanguage);
         setAudio(selected?.index);
         const preferredSubtitleLanguage =
             savedPreferences.subtitleLanguage === undefined
@@ -640,9 +661,10 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
-    if (!bootstrap || !playing || !mediaReady) return;
+    if (!iosPlayback || !bootstrap || !playing || !mediaReady) return;
     const token = upgradeSession;
-    const standardSource = `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${offset}&quality=${rendition}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`;
+    const targetQuality = bestAutoQuality(sourceHeight);
+    const standardSource = `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${offset}&quality=${targetQuality}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`;
     let cancelled = false;
     console.info("[playback] preparing standard stream", { id, file, rendition });
     void fetch(standardSource)
@@ -658,9 +680,10 @@ export default function StreamingPlayer({
         );
         console.info("[playback] switching from bootstrap", {
           elapsed: pendingSwitchTime.current,
-          rendition,
+          rendition: targetQuality,
         });
         setSession(token);
+        setRendition(targetQuality);
         setBootstrap(false);
       })
       .catch((reason) =>
@@ -669,7 +692,7 @@ export default function StreamingPlayer({
     return () => {
       cancelled = true;
     };
-  }, [audio, bootstrap, file, id, mediaReady, offset, playbackOffset, playing, preferences.audioSync, rendition, upgradeSession]);
+  }, [audio, bootstrap, file, id, iosPlayback, mediaReady, offset, playbackOffset, playing, preferences.audioSync, sourceHeight, upgradeSession]);
   useEffect(() => {
     const element = video.current;
     if (!iosPlayback || !source || !element || !Hls.isSupported()) return;
@@ -711,9 +734,43 @@ export default function StreamingPlayer({
   }, []);
   useEffect(() => {
     if (iosPlayback || qualityMode !== "auto" || !playing || loading) return;
-    const timer = setTimeout(() => adaptQuality("up"), 25_000);
-    return () => clearTimeout(timer);
-  }, [adaptQuality, iosPlayback, loading, playing, qualityMode, rendition]);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const target = bestAutoQuality(sourceHeight);
+      if (target === rendition || autoUpgradeRequested.current) return;
+      autoUpgradeRequested.current = true;
+      const targetAt = absoluteTimeRef.current;
+      const targetSession = newSessionToken();
+      const prewarm = `/api/debrid/transcode/${id}/${file}?session=${targetSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
+      try {
+        const response = await fetch(prewarm, {
+          headers: { Range: "bytes=0-1048575" },
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await response.body?.cancel();
+        if (cancelled || !playing) return;
+        persistRef.current(targetAt);
+        stopRef.current();
+        setLoading(true);
+        setError(false);
+        setErrorMessage("");
+        setLocalTime(0);
+        setOffset(targetAt);
+        setCompatible(true);
+        setBootstrap(false);
+        setRendition(target);
+        lastQualitySwitch.current = Date.now();
+        setSession(targetSession);
+      } catch (reason) {
+        autoUpgradeRequested.current = false;
+        console.warn("[playback] maximum quality prewarm failed", reason);
+      }
+    }, 4_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [audio, copyCompatibleVideo, file, id, iosPlayback, loading, playing, preferences.audioSync, qualityMode, rendition, sourceHeight]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -776,6 +833,10 @@ export default function StreamingPlayer({
           event.currentTarget.playbackRate = preferences.playbackRate;
           for (const track of event.currentTarget.textTracks)
             track.mode = "showing";
+          if (userPaused.current) {
+            event.currentTarget.pause();
+            return;
+          }
           void event.currentTarget.play().catch(() => {
             // Browsers may require a tap before audible playback. Keep audio
             // enabled so that the first user-initiated play starts with sound.
@@ -785,6 +846,12 @@ export default function StreamingPlayer({
         }}
         onClick={toggle}
         onPlay={() => {
+          if (userPaused.current) {
+            video.current?.pause();
+            return;
+          }
+          userPaused.current = false;
+          setPausedByUser(false);
           setPlaying(true);
           showControls();
         }}
@@ -824,6 +891,7 @@ export default function StreamingPlayer({
           startupRetries.current = 0;
           setPlaying(true);
           setLoading(false);
+          setStartedPlayback(true);
           const element = video.current;
           if (!firstFrameRecorded.current && element) {
             const record = () => {
@@ -898,8 +966,33 @@ export default function StreamingPlayer({
           Tap to play
         </button>
       )}
+      {pausedByUser && !error && (
+        <div className="pause-overlay" aria-label="Playback paused">
+          <button
+            aria-label="Back 10 seconds"
+            onClick={() => seek(displayTime - 10)}
+          >
+            <RotateCcw />
+            <span>10</span>
+          </button>
+          <button className="pause-overlay-play" aria-label="Play" onClick={toggle}>
+            <Play fill="currentColor" />
+          </button>
+          <button
+            aria-label="Forward 10 seconds"
+            onClick={() => seek(displayTime + 10)}
+          >
+            <RotateCw />
+            <span>10</span>
+          </button>
+        </div>
+      )}
       {!error && (
-        <ShardPortalLoader active={loading} compatible={compatible} />
+        startedPlayback ? (
+          loading && <div className="buffering-indicator" role="status" aria-label="Buffering" />
+        ) : (
+          <ShardPortalLoader active={loading} compatible={compatible} />
+        )
       )}
       {error && (
         <div className="playback-error" role="alert">
@@ -1087,12 +1180,15 @@ export default function StreamingPlayer({
                     className={audio === track.index ? "active" : ""}
                     key={track.index}
                     onClick={() => {
+                      const audioLanguage = track.language.toLowerCase();
+                      localStorage.setItem(AUDIO_LANGUAGE_KEY, audioLanguage);
+                      updatePreferences({ audioLanguage });
                       setMenu(null);
                       setCompatible(true);
                       restart(absoluteTime, track.index);
                     }}
                   >
-                    {languageName(track.language, track.title)}{" "}
+                    {languageName(track.language)}{" "}
                     <small>
                       {track.codec.toUpperCase()} · {track.channels || 2} ch
                     </small>
@@ -1157,6 +1253,7 @@ export default function StreamingPlayer({
                       onClick={() => {
                         const nextQuality = value === "auto" ? "480" : value;
                         setQualityMode(value);
+                        setBootstrap(false);
                         restart(absoluteTime, audio, nextQuality);
                       }}
                     >
