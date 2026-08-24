@@ -13,7 +13,7 @@ import {
   Sparkles,
   Tv,
 } from "lucide-react";
-import { DebridMagnetRecord, groupDebridCatalog } from "./lib/media-parser";
+import { DebridMagnetRecord, directPlayMovieFiles, groupDebridCatalog } from "./lib/media-parser";
 import type { ReleaseMetadata } from "./lib/release-parser";
 import { fetchWithTimeout, RequestTimeoutError } from "./lib/fetch-with-timeout";
 import { Route } from "./routing";
@@ -173,7 +173,12 @@ export default function DiscoveryPage({
           if (!activeIds.includes(preparation.magnetId)) continue;
           const record = records.find((item) => item.id === preparation.magnetId);
           if (!record) continue;
-          const ready = record.statusCode === 4 && record.videoFiles.length > 0;
+          const result = results.find((item) => item.id === resultId);
+          const playableFiles = result?.category === "movie"
+            ? directPlayMovieFiles(record.videoFiles, record.filename)
+            : record.videoFiles;
+          const incompatibleMovie = record.statusCode === 4 && result?.category === "movie" && playableFiles.length === 0;
+          const ready = record.statusCode === 4 && playableFiles.length > 0;
           const failed = record.statusCode > 4;
           const progress = ready
             ? 100
@@ -182,16 +187,16 @@ export default function DiscoveryPage({
               : Math.min(92, preparation.progress + 3);
           next[resultId] = {
             magnetId: preparation.magnetId,
-            phase: ready ? "ready" : failed ? "failed" : "preparing",
+            phase: ready ? "ready" : failed || incompatibleMovie ? "failed" : "preparing",
             progress,
-            status: ready ? "Ready to watch" : failed ? record.status || "Preparation failed" : record.status || "Preparing…",
-            record,
+            status: ready ? "Ready to watch" : incompatibleMovie ? "This release needs conversion and is not available for direct playback." : failed ? record.status || "Preparation failed" : record.status || "Preparing…",
+            record: ready ? { ...record, videoFiles: playableFiles } : record,
           };
         }
         return next;
       });
     } catch {}
-  }, [activeIds]);
+  }, [activeIds, results]);
 
   useEffect(() => {
     if (!activeIds.length) return;

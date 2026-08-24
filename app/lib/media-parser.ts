@@ -110,6 +110,24 @@ const isAuxiliaryVideo = (value: string) =>
   );
 const hasMeaningfulTitle = (value: string) => /[a-z]{2,}/i.test(value);
 
+const DIRECT_PLAY_MOVIE_EXTENSIONS = new Set(["mp4", "m4v"]);
+
+const conversionRequiredCodec =
+  /(?:^|[ ._[\]()-])(?:x265|h[ ._-]?265|hevc|av1|xvid|e-?ac-?3|dts(?:-?hd)?|truehd|ac-?3)(?=$|[ ._[\]()-])/i;
+
+export const isDirectPlayMovieFile = (
+  file: Pick<DebridFile, "name">,
+  releaseName = "",
+) =>
+  DIRECT_PLAY_MOVIE_EXTENSIONS.has(
+    file.name.split(".").pop()?.toLowerCase() || "",
+  ) && !conversionRequiredCodec.test(`${releaseName} ${file.name}`);
+
+export const directPlayMovieFiles = <T extends Pick<DebridFile, "name">>(
+  files: T[],
+  releaseName = "",
+) => files.filter((file) => isDirectPlayMovieFile(file, releaseName));
+
 export function groupDebridCatalog(
   magnets: DebridMagnetRecord[],
 ): CatalogTitle[] {
@@ -166,7 +184,7 @@ export function groupDebridCatalog(
       ).size;
       series.set(key, existing);
     } else {
-      magnet.videoFiles.forEach((file) => {
+      directPlayMovieFiles(magnet.videoFiles, magnet.filename).forEach((file) => {
         if (
           magnet.videoFiles.length > 1 &&
           (isAuxiliaryVideo(file.name) || file.size < largestVideo * 0.2)
