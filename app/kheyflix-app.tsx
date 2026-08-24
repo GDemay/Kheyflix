@@ -61,6 +61,39 @@ function IconButton({
   );
 }
 
+function StartupIntro() {
+  return (
+    <div className="app-startup-intro" aria-hidden="true">
+      <div className="app-startup-intro__tunnel" />
+      <div className="app-startup-intro__flare" />
+      <div className="app-startup-intro__brand">
+        <svg
+          className="app-startup-intro__mark"
+          viewBox="0 0 180 280"
+          focusable="false"
+        >
+          <defs>
+            <linearGradient id="startup-k-stem" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#ff4a4f" />
+              <stop offset="0.45" stopColor="#e50914" />
+              <stop offset="1" stopColor="#7a0209" />
+            </linearGradient>
+            <linearGradient id="startup-k-ribbon" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor="#7a0209" />
+              <stop offset="0.52" stopColor="#ff1d2a" />
+              <stop offset="1" stopColor="#8d0710" />
+            </linearGradient>
+          </defs>
+          <path className="startup-k-panel startup-k-panel--stem" d="M25 12h52v256H25z" />
+          <path className="startup-k-panel startup-k-panel--upper" d="M77 116 141 12h-58L46 87v90z" />
+          <path className="startup-k-panel startup-k-panel--lower" d="m74 119 82 149H96L46 177z" />
+        </svg>
+        <strong>KHEYFLIX</strong>
+      </div>
+    </div>
+  );
+}
+
 export function Header({
   route,
   navigate,
@@ -673,7 +706,11 @@ export default function KheyflixApp() {
         }
       : undefined;
   if (!hydrated)
-    return <main className="app-shell" aria-label="Loading Kheyflix" />;
+    return (
+      <main className="app-shell" aria-label="Loading Kheyflix">
+        <StartupIntro />
+      </main>
+    );
   if (route.section === "watch" && item)
     return (
       <Player
@@ -705,6 +742,7 @@ export default function KheyflixApp() {
     route.section === "debrid" || (route.section === "title" && Boolean(item));
   return (
     <main className="app-shell">
+      <StartupIntro />
       <div
         className="app-background"
         inert={modalOpen || undefined}

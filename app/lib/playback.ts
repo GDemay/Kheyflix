@@ -1,3 +1,5 @@
+import { showCentralTransportOverlay } from "./player-controls";
+
 const BROWSER_AUDIO_CODECS = new Set(["aac", "mp3", "opus", "vorbis"]);
 
 export type QualityMode = "auto" | "original" | "1080" | "720" | "480";
@@ -43,3 +45,54 @@ export const requiresMutedAutoplay = (userAgent = "") =>
 
 export const usesBootstrapStream = (iosPlayback: boolean, bootstrap: boolean) =>
   bootstrap && !iosPlayback;
+
+export type PlaybackSurfaceInput = {
+  controls: boolean;
+  error: boolean;
+  finePointer?: boolean;
+  iosPlayback: boolean;
+  loading: boolean;
+  pausedByUser: boolean;
+  playing: boolean;
+  startedPlayback: boolean;
+};
+
+export const playbackSurfaceState = ({
+  controls,
+  error,
+  finePointer = false,
+  iosPlayback,
+  loading,
+  pausedByUser,
+  playing,
+  startedPlayback,
+}: PlaybackSurfaceInput) => {
+  const showError = error,
+    showIosPrompt =
+      iosPlayback &&
+      !startedPlayback &&
+      !playing &&
+      !loading &&
+      !showError,
+    showInitialLoader = !startedPlayback && !showError && !showIosPrompt,
+    showBuffering = startedPlayback && loading && !showError,
+    showCentralControls =
+      !loading &&
+      !showError &&
+      !showIosPrompt &&
+      showCentralTransportOverlay({
+        controlsVisible: controls,
+        finePointer,
+        pausedByUser,
+        playing,
+      });
+
+  return {
+    dimVideo: showCentralControls,
+    showBuffering,
+    showCentralControls,
+    showError,
+    showInitialLoader,
+    showIosPrompt,
+  };
+};

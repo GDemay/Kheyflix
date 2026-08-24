@@ -28,6 +28,7 @@ import {
   availableQualities,
   bestAutoQuality,
   needsCompatiblePlayback,
+  playbackSurfaceState,
   QualityMode,
   RenditionQuality,
   requiresMutedAutoplay,
@@ -47,7 +48,6 @@ import {
 } from "./lib/playback-preferences";
 import { Route } from "./routing";
 import { PlaybackRequestGate } from "./lib/player-navigation";
-import { showCentralTransportOverlay } from "./lib/player-controls";
 
 type MediaInfo = {
   duration: number;
@@ -377,6 +377,16 @@ export default function StreamingPlayer({
       ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${!effectiveBootstrap && audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
+  const surfaces = playbackSurfaceState({
+    controls,
+    error,
+    finePointer,
+    iosPlayback,
+    loading,
+    pausedByUser,
+    playing,
+    startedPlayback,
+  });
   const playbackTitle = currentQueue?.seriesTitle
     ? `${currentQueue.seriesTitle} · S${String(currentQueue.season).padStart(2, "0")} E${String(currentQueue.episode).padStart(2, "0")} · ${currentQueue.label}`
     : route.title || currentQueue?.label || "Kheyflix video";
@@ -753,9 +763,24 @@ export default function StreamingPlayer({
   }, []);
   return (
     <main
-      className={`player-shell ${controls || !playing ? "controls-visible" : ""} subtitle-${subtitleSize}`}
+      className={`player-shell ${controls || !playing ? "controls-visible" : ""} ${surfaces.dimVideo ? "video-dimmed" : ""} subtitle-${subtitleSize}`}
       data-playback-phase={effectiveBootstrap ? "bootstrap" : "standard"}
       data-playback-quality={activeQuality}
+      data-playback-surface={
+        surfaces.showError
+          ? "error"
+          : surfaces.showBuffering
+            ? "buffering"
+            : surfaces.showIosPrompt
+              ? "ios-prompt"
+              : surfaces.showCentralControls
+                ? pausedByUser
+                  ? "paused-controls"
+                  : "quick-controls"
+                : surfaces.showInitialLoader && loading
+                  ? "initial-loading"
+                  : "video"
+      }
       data-first-frame-ms={firstFrameMs === undefined ? undefined : Math.round(firstFrameMs)}
       ref={shell}
       onMouseMove={(event) => {
@@ -901,7 +926,7 @@ export default function StreamingPlayer({
           />
         )}
       </video>
-      {iosPlayback && !playing && !loading && !error && (
+      {surfaces.showIosPrompt && (
         <button
           className="ios-play-prompt"
           onClick={(event) => {
@@ -917,12 +942,7 @@ export default function StreamingPlayer({
           Tap to play
         </button>
       )}
-      {showCentralTransportOverlay({
-        pausedByUser,
-        controlsVisible: controls,
-        playing,
-        finePointer,
-      }) && !error && (
+      {surfaces.showCentralControls && (
         <div
           className="pause-overlay"
           role="group"
@@ -951,14 +971,13 @@ export default function StreamingPlayer({
           </button>
         </div>
       )}
-      {!error && (
-        startedPlayback ? (
-          loading && <div className="buffering-indicator" role="status" aria-label="Buffering" />
-        ) : (
-          <ShardPortalLoader active={loading} compatible={compatible} />
-        )
+      {surfaces.showBuffering && (
+        <div className="buffering-indicator" role="status" aria-label="Buffering" />
       )}
-      {error && (
+      {surfaces.showInitialLoader && (
+        <ShardPortalLoader active={loading} compatible={compatible} />
+      )}
+      {surfaces.showError && (
         <div className="playback-error" role="alert">
           <h1>We couldn’t start playback</h1>
           <p>

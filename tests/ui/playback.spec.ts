@@ -92,6 +92,10 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await page.getByRole("button", { name: "Pause", exact: true }).click();
   const paused = page.getByLabel("Playback paused");
   await expect(paused).toBeVisible();
+  await expect(page.locator("main.player-shell")).toHaveClass(/video-dimmed/);
+  expect(
+    await video.evaluate((element) => getComputedStyle(element).filter),
+  ).not.toBe("none");
   await expect(paused.getByRole("button", { name: "Play" })).toBeVisible();
   await expect(
     paused.getByRole("button", { name: "Back 10 seconds" }),
@@ -225,6 +229,15 @@ test("pointer movement reveals unobtrusive playback chrome", async ({ page }, te
   await page.mouse.move(700, 400);
   await expect(shell).toHaveClass(/controls-visible/);
   await expect(page.getByRole("group", { name: "Playback quick controls" })).toHaveCount(0);
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("waiting")),
+  );
+  await expect(page.getByRole("status", { name: "Buffering" })).toBeVisible();
+  await expect(shell).not.toHaveClass(/video-dimmed/);
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing")),
+  );
+  await expect(page.getByRole("status", { name: "Buffering" })).toBeHidden();
   await page.clock.fastForward(3_000);
   await expect(shell).not.toHaveClass(/controls-visible/);
 });
@@ -232,11 +245,37 @@ test("pointer movement reveals unobtrusive playback chrome", async ({ page }, te
 test("touch playback keeps central quick controls", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "phone", "touch-specific behavior");
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
+  const shell = page.locator("main.player-shell");
   const video = page.locator("video");
   await expect(video).toBeVisible({ timeout: 30_000 });
   await video.evaluate((element) => {
     Object.defineProperty(element, "paused", { configurable: true, value: false });
     element.dispatchEvent(new Event("playing", { bubbles: true }));
   });
-  await expect(page.getByRole("group", { name: "Playback quick controls" })).toBeVisible();
+  const quickControls = page.getByRole("group", {
+    name: "Playback quick controls",
+  });
+  await expect(quickControls).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Back 10 seconds" }),
+  ).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Pause", exact: true }),
+  ).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Forward 10 seconds" }),
+  ).toBeVisible();
+  await expect(shell).toHaveClass(/video-dimmed/);
+
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("waiting")),
+  );
+  await expect(quickControls).toBeHidden();
+  await expect(page.getByRole("status", { name: "Buffering" })).toBeVisible();
+  await expect(shell).not.toHaveClass(/video-dimmed/);
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing")),
+  );
+  await expect(page.getByRole("status", { name: "Buffering" })).toBeHidden();
+  await expect(quickControls).toBeVisible();
 });
