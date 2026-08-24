@@ -59,21 +59,38 @@ export default function DiscoveryPage({
   const [seasonFilter, setSeasonFilter] = useState("all");
   const [episodeFilter, setEpisodeFilter] = useState("all");
   const [qualityFilter, setQualityFilter] = useState("all");
+  const [audioFilter, setAudioFilter] = useState("all");
   const [subtitleFilter, setSubtitleFilter] = useState("all");
 
   const filterOptions = useMemo(() => ({
     seasons: [...new Set(results.map((result) => result.metadata.season).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
     episodes: [...new Set(results.filter((result) => seasonFilter === "all" || result.metadata.season === Number(seasonFilter)).map((result) => result.metadata.episode).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
     qualities: [...new Set(results.map((result) => result.metadata.resolution).filter((value): value is NonNullable<Result["metadata"]["resolution"]> => Boolean(value)))],
+    audio: [...new Set(results.flatMap((result) => result.metadata.audioLanguages))].sort(),
     subtitles: [...new Set(results.flatMap((result) => result.metadata.subtitleLanguages))].sort(),
   }), [results, seasonFilter]);
+
+  const languageCounts = useMemo(() => ({
+    audio: Object.fromEntries(filterOptions.audio.map((language) => [language, results.filter((result) => result.metadata.audioLanguages.includes(language)).length])),
+    subtitles: Object.fromEntries(filterOptions.subtitles.map((language) => [language, results.filter((result) => result.metadata.subtitleLanguages.includes(language)).length])),
+  }), [filterOptions.audio, filterOptions.subtitles, results]);
 
   const visibleResults = useMemo(() => results.filter((result) =>
     (seasonFilter === "all" || result.metadata.season === Number(seasonFilter)) &&
     (episodeFilter === "all" || (result.metadata.episode !== undefined && Number(episodeFilter) >= result.metadata.episode && Number(episodeFilter) <= (result.metadata.episodeEnd || result.metadata.episode))) &&
     (qualityFilter === "all" || result.metadata.resolution === qualityFilter) &&
+    (audioFilter === "all" || result.metadata.audioLanguages.includes(audioFilter)) &&
     (subtitleFilter === "all" || result.metadata.subtitleLanguages.includes(subtitleFilter)),
-  ), [results, seasonFilter, episodeFilter, qualityFilter, subtitleFilter]);
+  ), [results, seasonFilter, episodeFilter, qualityFilter, audioFilter, subtitleFilter]);
+
+  const filtersActive = seasonFilter !== "all" || episodeFilter !== "all" || qualityFilter !== "all" || audioFilter !== "all" || subtitleFilter !== "all";
+  const clearFilters = () => {
+    setSeasonFilter("all");
+    setEpisodeFilter("all");
+    setQualityFilter("all");
+    setAudioFilter("all");
+    setSubtitleFilter("all");
+  };
 
   const activeIds = useMemo(
     () =>
@@ -103,6 +120,7 @@ export default function DiscoveryPage({
       setSeasonFilter("all");
       setEpisodeFilter("all");
       setQualityFilter("all");
+      setAudioFilter("all");
       setSubtitleFilter("all");
     } catch (reason) {
       setResults([]);
@@ -274,8 +292,9 @@ export default function DiscoveryPage({
           {searchKind === "series" && <div><span>Season</span><select aria-label="Filter by season" value={seasonFilter} onChange={(event) => { setSeasonFilter(event.target.value); setEpisodeFilter("all"); }}><option value="all">Any season</option>{filterOptions.seasons.map((season) => <option value={season} key={season}>Season {season}</option>)}</select></div>}
           {searchKind === "series" && <div><span>Episode</span><select aria-label="Filter by episode" value={episodeFilter} onChange={(event) => setEpisodeFilter(event.target.value)}><option value="all">Any episode</option>{filterOptions.episodes.map((episode) => <option value={episode} key={episode}>Episode {episode}</option>)}</select></div>}
           <div><span>Quality</span><select aria-label="Filter by quality" value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}><option value="all">Any quality</option>{filterOptions.qualities.map((quality) => <option value={quality} key={quality}>{quality}</option>)}</select></div>
-          <div><span>Subtitles</span><select aria-label="Filter by subtitles" value={subtitleFilter} onChange={(event) => setSubtitleFilter(event.target.value)}><option value="all">Any subtitles</option>{filterOptions.subtitles.map((language) => <option value={language} key={language}>{language}</option>)}</select></div>
-          <strong>{visibleResults.length} result{visibleResults.length === 1 ? "" : "s"}</strong>
+          <div><span>Audio</span><select aria-label="Filter by audio" value={audioFilter} disabled={filterOptions.audio.length === 0} onChange={(event) => setAudioFilter(event.target.value)}><option value="all">{filterOptions.audio.length ? "Any audio" : "No audio details"}</option>{filterOptions.audio.map((language) => <option value={language} key={language}>{language} ({languageCounts.audio[language]})</option>)}</select>{filterOptions.audio.length === 0 && <small>No audio languages advertised by sources</small>}</div>
+          <div><span>Subtitles</span><select aria-label="Filter by subtitles" value={subtitleFilter} disabled={filterOptions.subtitles.length === 0} onChange={(event) => setSubtitleFilter(event.target.value)}><option value="all">{filterOptions.subtitles.length ? "Any subtitles" : "No subtitle details"}</option>{filterOptions.subtitles.map((language) => <option value={language} key={language}>{language} ({languageCounts.subtitles[language]})</option>)}</select>{filterOptions.subtitles.length === 0 && <small>No subtitle languages advertised by sources</small>}</div>
+          <div className="discovery-filter-summary"><strong>Showing {visibleResults.length} of {results.length} releases</strong>{filtersActive && <button type="button" onClick={clearFilters}>Clear filters</button>}</div>
         </div>
       )}
       {results.length > 0 && visibleResults.length === 0 && (
@@ -300,8 +319,10 @@ export default function DiscoveryPage({
                   {result.metadata.resolution && <span>{result.metadata.resolution}</span>}
                   {result.metadata.sourceType && <span>{result.metadata.sourceType}</span>}
                   {result.metadata.videoCodec && <span>{result.metadata.videoCodec}</span>}
-                  {result.metadata.audioLanguages.map((language) => <span key={`audio-${language}`}>{language} audio</span>)}
-                  {result.metadata.subtitleLanguages.map((language) => <span className="subtitle-tag" key={`sub-${language}`}>{language} subtitles</span>)}
+                </div>
+                <div className="release-languages" aria-label="Advertised languages">
+                  <span>Audio: <strong>{result.metadata.audioLanguages.join(", ") || "Not specified"}</strong></span>
+                  <span>Subtitles: <strong>{result.metadata.subtitleLanguages.join(", ") || "Not specified"}</strong></span>
                 </div>
                 <p>{formatSize(result.size)} · {result.seeders} sources available</p>
                 <details className="release-details"><summary>Release details</summary>{result.title}</details>
