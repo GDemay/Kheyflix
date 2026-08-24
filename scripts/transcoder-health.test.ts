@@ -73,8 +73,10 @@ afterEach(async () => {
 
 describe("transcoder dependency health", () => {
   test("proves the transcoder process can reach its configured app origin", async () => {
-    const app = createServer((_request, response) => {
-      response.writeHead(400).end();
+    const requests: Array<{ method?: string; url?: string }> = [];
+    const app = createServer((request, response) => {
+      requests.push({ method: request.method, url: request.url });
+      response.writeHead(200).end();
     });
     servers.push(app);
     const appPort = await listen(app);
@@ -82,6 +84,8 @@ describe("transcoder dependency health", () => {
     await expect(
       startTranscoder(`http://127.0.0.1:${appPort}`),
     ).resolves.toMatchObject({ ok: true, appOrigin: true });
+    expect(requests).toContainEqual({ method: "HEAD", url: "/" });
+    expect(requests.some(({ url }) => url?.includes("/api/debrid/stream"))).toBe(false);
   });
 
   test("fails health when the transcoder process has a wrong app origin", async () => {
