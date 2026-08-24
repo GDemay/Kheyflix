@@ -57,16 +57,26 @@ export function selectedStreamIndex(value, fallback = 1) {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
+export function subtitleTimelineOptions(value) {
+  const parsed = Number(value);
+  const seconds = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  if (!seconds) return { input: [], output: [] };
+  const timestamp = String(seconds);
+  return {
+    input: ["-ss", timestamp, "-copyts"],
+    output: ["-ss", timestamp, "-output_ts_offset", `-${timestamp}`],
+  };
+}
+
 export function audioSyncOptions(value) {
   const parsed = Number(value);
   const seconds = Number.isFinite(parsed)
     ? Math.max(-5, Math.min(5, Math.round(parsed * 10) / 10))
     : 0;
-  if (!seconds) return [];
+  const filters = ["aresample=async=1000:first_pts=0"];
   if (seconds > 0)
-    return ["-af", `adelay=${Math.round(seconds * 1000)}:all=1`];
-  return [
-    "-af",
-    `atrim=start=${Math.abs(seconds)},asetpts=PTS-STARTPTS`,
-  ];
+    filters.push(`adelay=${Math.round(seconds * 1000)}:all=1`);
+  else if (seconds < 0)
+    filters.push(`atrim=start=${Math.abs(seconds)}`, "asetpts=PTS-STARTPTS");
+  return ["-af", filters.join(",")];
 }

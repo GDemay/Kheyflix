@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   audioSyncOptions,
   selectedStreamIndex,
+  subtitleTimelineOptions,
   videoOutputOptions,
 } from "./transcoder-options.mjs";
 
@@ -352,7 +353,8 @@ const server = http.createServer(async (request, response) => {
       const subtitleStart = Math.max(
         0,
         Number(url.searchParams.get("start") || 0),
-      );
+      ),
+        subtitleTimeline = subtitleTimelineOptions(subtitleStart);
       const info = await probeMedia(subtitle[1], subtitle[2]),
         track = info.subtitles.find(
           (item) => item.index === Number(subtitle[3]),
@@ -367,9 +369,10 @@ const server = http.createServer(async (request, response) => {
           "-hide_banner",
           "-loglevel",
           "error",
-          ...(subtitleStart ? ["-ss", String(subtitleStart)] : []),
+          ...subtitleTimeline.input,
           "-i",
           inputFor(subtitle[1], subtitle[2]),
+          ...subtitleTimeline.output,
           "-map",
           `0:${subtitle[3]}`,
           "-f",

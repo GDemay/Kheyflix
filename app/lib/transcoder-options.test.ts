@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   audioSyncOptions,
   selectedStreamIndex,
+  subtitleTimelineOptions,
   videoOutputOptions,
 } from "../../scripts/transcoder-options.mjs";
 
@@ -63,19 +64,34 @@ describe("compatible playback transcoder options", () => {
     expect(selectedStreamIndex("not-a-stream")).toBe(1);
   });
 
-  it("moves audio later or earlier with bounded VLC-style corrections", () => {
+  it("continuously reconciles audio timestamps and composes manual corrections", () => {
+    expect(audioSyncOptions("0")).toEqual([
+      "-af",
+      "aresample=async=1000:first_pts=0",
+    ]);
     expect(audioSyncOptions("0.5")).toEqual([
       "-af",
-      "adelay=500:all=1",
+      "aresample=async=1000:first_pts=0,adelay=500:all=1",
     ]);
     expect(audioSyncOptions("-0.4")).toEqual([
       "-af",
-      "atrim=start=0.4,asetpts=PTS-STARTPTS",
+      "aresample=async=1000:first_pts=0,atrim=start=0.4,asetpts=PTS-STARTPTS",
     ]);
     expect(audioSyncOptions("20")).toEqual([
       "-af",
-      "adelay=5000:all=1",
+      "aresample=async=1000:first_pts=0,adelay=5000:all=1",
     ]);
-    expect(audioSyncOptions("invalid")).toEqual([]);
+    expect(audioSyncOptions("invalid")).toEqual([
+      "-af",
+      "aresample=async=1000:first_pts=0",
+    ]);
+  });
+
+  it("fast-seeks subtitles while preserving and rebasing their source timestamps", () => {
+    expect(subtitleTimelineOptions(0)).toEqual({ input: [], output: [] });
+    expect(subtitleTimelineOptions(125.5)).toEqual({
+      input: ["-ss", "125.5", "-copyts"],
+      output: ["-ss", "125.5", "-output_ts_offset", "-125.5"],
+    });
   });
 });
