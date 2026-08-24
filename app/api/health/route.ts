@@ -1,6 +1,7 @@
 import { isProwlarrReady } from "../../lib/prowlarr";
+import { observeApi, requestIdFor, writeLog } from "../../lib/observability";
 
-export async function GET() {
+const handleGet = async (request: Request) => {
   const transcoderUrl =
     process.env.KHEYFLIX_TRANSCODER_URL || "http://127.0.0.1:3101";
   const configured = {
@@ -36,6 +37,13 @@ export async function GET() {
     dependencies.transcoder &&
     (!configured.discovery || dependencies.discovery);
 
+  writeLog(ready ? "info" : "warn", "health.check.completed", {
+    requestId: requestIdFor(request),
+    ready,
+    configured,
+    dependencies,
+  });
+
   return Response.json(
     {
       status: ready ? "ok" : "degraded",
@@ -47,4 +55,6 @@ export async function GET() {
     },
     { headers: { "Cache-Control": "no-store" } },
   );
-}
+};
+
+export const GET = observeApi("/api/health", handleGet);

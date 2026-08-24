@@ -1,8 +1,9 @@
 import { AllDebridError } from "../../../../../../lib/alldebrid";
-export async function GET(
+import { observeApi, publicErrorMessage, requestIdFor, writeLog } from "../../../../../../lib/observability";
+const handleGet = async (
   request: Request,
   { params }: { params: Promise<{ id: string; file: string; stream: string }> },
-) {
+) => {
   try {
     const { id, file, stream } = await params;
     if (![id, file, stream].every((value) => /^\d+$/.test(value)))
@@ -32,9 +33,20 @@ export async function GET(
       error instanceof AllDebridError
         ? error
         : new AllDebridError("Subtitle track is unavailable.");
+    writeLog("error", "debrid.subtitle.failed", {
+      requestId: requestIdFor(request),
+      code: known.code,
+      status: known.status,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return Response.json(
-      { error: { code: known.code, message: known.message } },
+      { error: { code: known.code, message: publicErrorMessage(known.message, "Subtitle track is unavailable.") } },
       { status: known.status },
     );
   }
-}
+};
+
+export const GET = observeApi(
+  "/api/debrid/subtitle/:id/:file/:stream",
+  handleGet,
+);

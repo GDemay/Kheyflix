@@ -1,15 +1,16 @@
 import { AllDebridError } from "../../../../../../../lib/alldebrid";
+import { observeApi, publicErrorMessage, requestIdFor, writeLog } from "../../../../../../../lib/observability";
 
 const ASSETS = /^(?:master\.m3u8|segment\d+\.ts)$/;
 
-export async function GET(
+const handleGet = async (
   request: Request,
   {
     params,
   }: {
     params: Promise<{ id: string; file: string; session: string; asset: string }>;
   },
-) {
+) => {
   try {
     const { id, file, session, asset } = await params;
     if (
@@ -52,9 +53,20 @@ export async function GET(
       error instanceof AllDebridError
         ? error
         : new AllDebridError("The iOS-compatible stream is unavailable.");
+    writeLog("error", "debrid.hls.failed", {
+      requestId: requestIdFor(request),
+      code: known.code,
+      status: known.status,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return Response.json(
-      { error: { code: known.code, message: known.message } },
+      { error: { code: known.code, message: publicErrorMessage(known.message, "The iOS-compatible stream is unavailable.") } },
       { status: known.status },
     );
   }
-}
+};
+
+export const GET = observeApi(
+  "/api/debrid/hls/:id/:file/:session/:asset",
+  handleGet,
+);

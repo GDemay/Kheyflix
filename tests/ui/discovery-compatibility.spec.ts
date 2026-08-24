@@ -152,3 +152,88 @@ test("unavailable language filters explain why they are disabled", async ({ page
   await expect(page.getByText("No audio languages advertised by sources")).toBeVisible();
   await expect(page.getByText("No subtitle languages advertised by sources")).toBeVisible();
 });
+
+test("a progress refresh failure becomes retryable and carries its request reference", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  await page.route("**/api/discovery/search?*", (route) => route.fulfill({
+    json: {
+      results: [{
+        id: "pokemon-movie",
+        title: "Pokemon.Detective.Pikachu.2019.1080p.x264",
+        size: 2_000_000_000,
+        seeders: 12,
+        peers: 2,
+        source: "Test source",
+        category: "movie",
+        magnet: "magnet:?xt=urn:btih:POKEMONMOVIE",
+        metadata: { displayTitle: "Pokemon Detective Pikachu", year: 2019, resolution: "1080p", audioLanguages: [], subtitleLanguages: [] },
+      }],
+    },
+  }));
+  await page.route("**/api/debrid/magnets**", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 201,
+        headers: { "x-request-id": "upload-ref" },
+        json: { magnet: { id: 42, ready: false } },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      headers: { "x-request-id": "refresh-ref" },
+      json: { error: { code: "ALLDEBRID_UNAVAILABLE", message: "Media preparation is temporarily unavailable." } },
+    });
+  });
+
+  await page.goto("/discover");
+  await page.getByLabel("Search connected sources").fill("Pokemon");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByText("I confirm I’m authorized").click();
+  await page.getByRole("button", { name: "Prepare", exact: true }).click();
+
+  await expect(page.getByText(/Media preparation is temporarily unavailable.*refresh-ref/)).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+  expect(browserErrors.some((message) => message.includes("refresh-ref"))).toBe(true);
+});
+
+test("a network failure during preparation has a client-generated trace reference", async ({ page }) => {
+  let requestId = "";
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  await page.route("**/api/discovery/search?*", (route) => route.fulfill({
+    json: {
+      results: [{
+        id: "pokemon-movie",
+        title: "Pokemon.Detective.Pikachu.2019.1080p.x264",
+        size: 2_000_000_000,
+        seeders: 12,
+        peers: 2,
+        source: "Test source",
+        category: "movie",
+        magnet: "magnet:?xt=urn:btih:POKEMONMOVIE",
+        metadata: { displayTitle: "Pokemon Detective Pikachu", year: 2019, resolution: "1080p", audioLanguages: [], subtitleLanguages: [] },
+      }],
+    },
+  }));
+  await page.route("**/api/debrid/magnets", async (route) => {
+    requestId = route.request().headers()["x-request-id"] || "";
+    await route.abort("failed");
+  });
+
+  await page.goto("/discover");
+  await page.getByLabel("Search connected sources").fill("Pokemon");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByText("I confirm I’m authorized").click();
+  await page.getByRole("button", { name: "Prepare", exact: true }).click();
+
+  expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(page.getByText(new RegExp(`Reference: ${requestId}`))).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+  expect(browserErrors.some((message) => message.includes(requestId))).toBe(true);
+});

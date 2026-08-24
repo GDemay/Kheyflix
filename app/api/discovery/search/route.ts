@@ -1,6 +1,7 @@
 import { ProwlarrError, searchProwlarr } from "../../../lib/prowlarr";
+import { observeApi, requestIdFor, writeLog } from "../../../lib/observability";
 
-export async function GET(request: Request) {
+const handleGet = async (request: Request) => {
   try {
     const query = new URL(request.url).searchParams.get("q") || "";
     const parameters = new URL(request.url).searchParams;
@@ -9,12 +10,18 @@ export async function GET(request: Request) {
     const episode = Number(parameters.get("episode"));
     if (query.trim().length < 2)
       return Response.json({ results: [] }, { headers: { "Cache-Control": "no-store" } });
-    return Response.json(
-      { results: await searchProwlarr(query, {
+    const results = await searchProwlarr(query, {
         kind: kind === "movie" || kind === "series" ? kind : undefined,
         season: Number.isInteger(season) && season > 0 ? season : undefined,
         episode: Number.isInteger(episode) && episode > 0 ? episode : undefined,
-      }) },
+      });
+    writeLog("info", "discovery.search.completed", {
+      requestId: requestIdFor(request),
+      kind: kind === "movie" || kind === "series" ? kind : "all",
+      resultCount: results.length,
+    });
+    return Response.json(
+      { results },
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (error) {
@@ -22,9 +29,17 @@ export async function GET(request: Request) {
       error instanceof ProwlarrError
         ? error
         : new ProwlarrError("Discovery is temporarily unavailable.");
+    writeLog("error", "discovery.search.failed", {
+      requestId: requestIdFor(request),
+      error: error instanceof Error ? error : new Error(String(error)),
+      code: known.code,
+      status: known.status,
+    });
     return Response.json(
       { error: { code: known.code, message: known.message } },
       { status: known.status },
     );
   }
-}
+};
+
+export const GET = observeApi("/api/discovery/search", handleGet);

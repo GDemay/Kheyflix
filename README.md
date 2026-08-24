@@ -46,5 +46,8 @@ Production automatically deploys canonical GitHub `main`. The manual
 See [docs/deployment.md](docs/deployment.md) for environment URLs, secret
 management, promotion, rollback, and troubleshooting.
 
+See [docs/observability.md](docs/observability.md) for structured production
+logs, request correlation, browser diagnostics, and the incident workflow.
+
 Never commit `.env*` or real credential values. Rotate any credential that has
 been exposed outside its intended secret store.

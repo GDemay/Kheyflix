@@ -1,0 +1,50 @@
+# Production observability
+
+Kheyflix writes newline-delimited JSON events to standard output and standard
+error. Railway collects these streams without a separate in-process transport.
+Every public API response also returns `X-Request-Id` and `Server-Timing`.
+
+## Correlating an incident
+
+1. Copy the `Reference` shown in a user-facing error, or the `x-request-id`
+   response header from browser developer tools.
+2. Search Railway logs for the exact `requestId`.
+3. Start with `http.request.completed`, then inspect provider events carrying the
+   same identifier, such as `discovery.search.failed` or
+   `debrid.operation.failed`.
+4. Use `deploymentCommit`, `route`, `status`, `errorCode`, and `durationMs` to
+   identify the affected deployment and failure boundary.
+
+The browser console also emits structured discovery lifecycle events. These
+include search result counts, preparation start/acceptance, and correlated API
+failures. They never include the search term, release title, magnet URI, request
+body, credentials, or unlocked provider URL.
+
+## Event contract
+
+All server events contain `timestamp`, `level`, `event`, `service`,
+`environment`, and `deploymentCommit`. HTTP completion events add `requestId`,
+`method`, `route`, `status`, and `durationMs`; failed JSON responses also add
+`errorCode` when available.
+
+Provider and health events add only bounded operational metadata: result counts,
+cache state, dependency booleans, provider error type/code, or numeric resource
+identifiers. A central sanitizer redacts sensitive field names, authorization
+values, credential/token/cookie/session patterns, magnet URIs, and HTTP(S) URLs
+as defense in depth. Provider messages cross an additional public-message filter
+before they can appear in an API response.
+
+Expected severity:
+
+- `info`: successful requests and operations;
+- `warn`: client errors, degraded optional dependencies, or recoverable states;
+- `error`: server/upstream failures and unhandled exceptions.
+
+## Operational checks
+
+- A healthy request produces exactly one `http.request.completed` event.
+- A 5xx event must carry the same request ID as the response and user reference.
+- `/api/health` emits `health.check.completed` with dependency booleans and must
+  report the exact deployed commit in its response.
+- Never add request bodies, raw query strings, headers, magnets, or provider URLs
+  to logging context.
