@@ -122,6 +122,7 @@ export async function searchProwlarr(query: string, options: DiscoverySearchOpti
   url.searchParams.set("query", `${term}${episodeSuffix}`);
   url.searchParams.set("type", "search");
   url.searchParams.set("limit", String(DEFAULT_LIMIT));
+  if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
   const response = await fetch(url, {
     headers: { "X-Api-Key": apiKey, Accept: "application/json" },
     cache: "no-store",
@@ -147,7 +148,13 @@ export async function searchProwlarr(query: string, options: DiscoverySearchOpti
       const title = release.title?.trim();
       if (!magnet || !title) return [];
       const metadata = parseReleaseTitle(title);
-      const category = options.kind || categoryFor(release);
+      const inferredCategory = categoryFor(release);
+      if (
+        options.kind &&
+        release.categories?.length &&
+        inferredCategory !== options.kind
+      ) return [];
+      const category = options.kind || inferredCategory;
       if (category === "movie" && explicitlyRequiresCompatibility(title)) return [];
       if (season && metadata.season !== season) return [];
       if (episode && (metadata.episode === undefined || episode < metadata.episode || episode > (metadata.episodeEnd || metadata.episode))) return [];

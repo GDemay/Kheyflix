@@ -82,7 +82,33 @@ describe("Prowlarr discovery", () => {
     expect(results[0].metadata).toMatchObject({ season: 2, episode: 3, episodeEnd: 4 });
     const requestedUrl = fetchMock.mock.calls[0][0] as URL;
     expect(requestedUrl.searchParams.get("query")).toBe("Example Show S02E04");
-    expect(requestedUrl.searchParams.has("categories")).toBe(false);
+    expect(requestedUrl.searchParams.get("categories")).toBe("5000");
+  });
+
+  it("requests movie sources and rejects explicitly non-video releases", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json([
+      {
+        title: "Pokemon Legends Z-A [FitGirl Repack]",
+        magnetUrl: "magnet:?xt=urn:btih:GAME001",
+        categories: [{ id: 4050, name: "PC Games" }],
+      },
+      {
+        title: "Pokemon Detective Pikachu 2019 1080p x264",
+        magnetUrl: "magnet:?xt=urn:btih:MOVIE01",
+        categories: [{ id: 2000, name: "Movies" }],
+      },
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await searchProwlarr("Pokemon", { kind: "movie" });
+
+    expect(results.map((result) => result.title)).toEqual([
+      "Pokemon Detective Pikachu 2019 1080p x264",
+    ]);
+    const requestedUrl = fetchMock.mock.calls[0][0] as URL;
+    expect(requestedUrl.searchParams.get("categories")).toBe("2000");
   });
 
   it("uses the requested kind when Prowlarr omits category metadata", async () => {

@@ -42,6 +42,73 @@ const formatSize = (bytes: number) =>
   bytes > 0 ? `${(bytes / 1024 ** 3).toFixed(bytes > 10 * 1024 ** 3 ? 0 : 1)} GB` : "Size pending";
 export const DISCOVERY_SEARCH_TIMEOUT_MS = 15_000;
 
+type ApiErrorPayload = {
+  error?: { code?: string; message?: string; requestId?: string };
+};
+
+const apiFailure = (
+  response: Response,
+  payload: ApiErrorPayload,
+  fallback: string,
+) => {
+  const requestId = response.headers.get("x-request-id") || payload.error?.requestId;
+  const message = payload.error?.message || fallback;
+  return {
+    message: requestId ? `${message} Reference: ${requestId}.` : message,
+    requestId,
+    code: payload.error?.code || "REQUEST_FAILED",
+    status: response.status,
+  };
+};
+
+const reportApiFailure = (operation: string, failure: ReturnType<typeof apiFailure>) => {
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: "error",
+    event: "api.request.failed",
+    operation,
+    ...failure,
+  }));
+};
+
+class ApiRequestError extends Error {
+  constructor(public failure: ReturnType<typeof apiFailure>) {
+    super(failure.message);
+    this.name = "ApiRequestError";
+  }
+}
+
+const reportUnexpectedClientFailure = (operation: string, reason: unknown, requestId: string) => {
+  const failure = {
+    message: reason instanceof RequestTimeoutError
+      ? "The request timed out. Check your connection and try again."
+      : "The request could not be completed. Check your connection and try again.",
+    requestId,
+    code: reason instanceof RequestTimeoutError ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
+    status: 0,
+    errorType: reason instanceof Error ? reason.name : "UnknownError",
+  };
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: "error",
+    event: "api.request.failed",
+    operation,
+    ...failure,
+  }));
+  return failure;
+};
+
+const clientRequestId = () => crypto.randomUUID();
+
+const reportClientEvent = (event: string, context: Record<string, unknown>) => {
+  console.info(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: "info",
+    event,
+    ...context,
+  }));
+};
+
 export default function DiscoveryPage({
   navigate,
 }: {
@@ -103,6 +170,7 @@ export default function DiscoveryPage({
 
   const runSearch = async (term: string) => {
     if (term.length < 2) return;
+    const requestId = clientRequestId();
     setSearching(true);
     setError("");
     try {
@@ -111,24 +179,35 @@ export default function DiscoveryPage({
       if (searchKind === "series" && requestedEpisode) parameters.set("episode", requestedEpisode);
       const response = await fetchWithTimeout(
         `/api/discovery/search?${parameters}`,
-        {},
+        { headers: { "x-request-id": requestId } },
         DISCOVERY_SEARCH_TIMEOUT_MS,
       );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || "Search is unavailable.");
+      const data = await response.json() as ApiErrorPayload & { results?: Result[] };
+      if (!response.ok) {
+        const failure = apiFailure(response, data, "Search is unavailable.");
+        reportApiFailure("discovery.search", failure);
+        throw new ApiRequestError(failure);
+      }
       setResults(data.results || []);
+      reportClientEvent("discovery.search.completed", {
+        kind: searchKind,
+        resultCount: data.results?.length || 0,
+        requestId: response.headers.get("x-request-id"),
+      });
       setSeasonFilter("all");
       setEpisodeFilter("all");
       setQualityFilter("all");
       setAudioFilter("all");
       setSubtitleFilter("all");
     } catch (reason) {
+      const unexpected = reason instanceof ApiRequestError
+        ? undefined
+        : reportUnexpectedClientFailure("discovery.search", reason, requestId);
       setResults([]);
-      setError(
-        reason instanceof RequestTimeoutError
+      const message = reason instanceof RequestTimeoutError
           ? "Search timed out. Check your connection and try again."
-          : reason instanceof Error ? reason.message : "Search is unavailable.",
-      );
+          : reason instanceof Error ? reason.message : "Search is unavailable.";
+      setError(unexpected ? `${message} Reference: ${requestId}.` : message);
     } finally {
       setSearching(false);
     }
@@ -141,6 +220,8 @@ export default function DiscoveryPage({
 
   const prepare = async (result: Result) => {
     if (!rightsConfirmed) return;
+    const requestId = clientRequestId();
+    reportClientEvent("discovery.prepare.started", { releaseId: result.id, requestId });
     setError("");
     setPreparations((current) => ({
       ...current,
@@ -149,11 +230,15 @@ export default function DiscoveryPage({
     try {
       const response = await fetch("/api/debrid/magnets", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-request-id": requestId },
         body: JSON.stringify({ magnet: result.magnet, rightsConfirmed: true }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || "Kheyflix could not prepare this title.");
+      const data = await response.json() as ApiErrorPayload & { magnet: { id: number; ready?: boolean } };
+      if (!response.ok) {
+        const failure = apiFailure(response, data, "Kheyflix could not prepare this title.");
+        reportApiFailure("discovery.prepare", failure);
+        throw new ApiRequestError(failure);
+      }
       setPreparations((current) => ({
         ...current,
         [result.id]: {
@@ -163,14 +248,24 @@ export default function DiscoveryPage({
           status: data.magnet.ready ? "Checking playable files…" : "Preparing…",
         },
       }));
+      reportClientEvent("discovery.prepare.accepted", {
+        releaseId: result.id,
+        magnetId: Number(data.magnet.id),
+        requestId: response.headers.get("x-request-id"),
+      });
     } catch (reason) {
+      const unexpected = reason instanceof ApiRequestError
+        ? undefined
+        : reportUnexpectedClientFailure("discovery.prepare", reason, requestId);
       setPreparations((current) => ({
         ...current,
         [result.id]: {
           magnetId: current[result.id]?.magnetId || 0,
           phase: "failed",
           progress: 0,
-          status: reason instanceof Error ? reason.message : "Preparation failed.",
+          status: unexpected
+            ? `${unexpected.message} Reference: ${requestId}.`
+            : reason instanceof Error ? reason.message : "Preparation failed.",
         },
       }));
     }
@@ -178,10 +273,27 @@ export default function DiscoveryPage({
 
   const refreshProgress = useCallback(async () => {
     if (!activeIds.length) return;
+    const requestId = clientRequestId();
     try {
-      const response = await fetch("/api/debrid/magnets?refresh=1", { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) return;
+      const response = await fetch("/api/debrid/magnets?refresh=1", {
+        cache: "no-store",
+        headers: { "x-request-id": requestId },
+      });
+      const data = await response.json() as ApiErrorPayload & { magnets?: Array<
+        DebridMagnetRecord & { size?: number; downloaded?: number; status?: string }
+      > };
+      if (!response.ok) {
+        const failure = apiFailure(response, data, "Media preparation is temporarily unavailable.");
+        reportApiFailure("discovery.prepare.refresh", failure);
+        setPreparations((current) => Object.fromEntries(
+          Object.entries(current).map(([resultId, preparation]) =>
+            activeIds.includes(preparation.magnetId)
+              ? [resultId, { ...preparation, phase: "failed", progress: 0, status: failure.message }]
+              : [resultId, preparation],
+          ),
+        ));
+        return;
+      }
       const records = (data.magnets || []) as Array<
         DebridMagnetRecord & { size?: number; downloaded?: number; status?: string }
       >;
@@ -213,7 +325,29 @@ export default function DiscoveryPage({
         }
         return next;
       });
-    } catch {}
+    } catch (reason) {
+      const failure = {
+        message: `Unable to check preparation progress. Check your connection and try again. Reference: ${requestId}.`,
+        requestId,
+        code: "NETWORK_ERROR",
+        status: 0,
+      };
+      console.error(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        event: "api.request.failed",
+        operation: "discovery.prepare.refresh",
+        ...failure,
+        errorType: reason instanceof Error ? reason.name : "UnknownError",
+      }));
+      setPreparations((current) => Object.fromEntries(
+        Object.entries(current).map(([resultId, preparation]) =>
+          activeIds.includes(preparation.magnetId)
+            ? [resultId, { ...preparation, phase: "failed", progress: 0, status: failure.message }]
+            : [resultId, preparation],
+        ),
+      ));
+    }
   }, [activeIds, results]);
 
   useEffect(() => {
