@@ -106,6 +106,11 @@ test("language status is explicit and language filters are actionable", async ({
   await expect(page.getByLabel("Filter by audio")).toContainText("English (1)");
   await expect(page.getByLabel("Filter by subtitles")).toContainText("English (1)");
 
+  if ((page.viewportSize()?.width ?? 0) <= 700) {
+    const subtitleFilterWidth = await page.getByLabel("Filter by subtitles").evaluate((element) => element.getBoundingClientRect().width);
+    expect(subtitleFilterWidth).toBeGreaterThanOrEqual(260);
+  }
+
   await page.getByLabel("Filter by subtitles").selectOption("English");
   await expect(page.getByText("Showing 1 of 3 releases")).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(1);
