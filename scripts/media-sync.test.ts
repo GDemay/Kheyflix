@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ffmpegPath from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -12,9 +14,11 @@ import { rebaseWebVtt } from "./subtitle-timeline.mjs";
 
 const directory = mkdtempSync(join(tmpdir(), "kheyflix-media-sync-"));
 const source = join(directory, "source.mkv");
+const ffmpegBinary = ffmpegPath || "ffmpeg",
+  ffprobeBinary = ffprobeStatic.path || "ffprobe";
 
 function ffmpeg(args: string[]) {
-  const result = spawnSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], {
+  const result = spawnSync(ffmpegBinary, ["-y", "-hide_banner", "-loglevel", "error", ...args], {
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -24,7 +28,7 @@ function ffmpeg(args: string[]) {
 
 function ffprobe(path: string) {
   const result = spawnSync(
-    "ffprobe",
+    ffprobeBinary,
     ["-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time", "-of", "json", path],
     { encoding: "utf8", timeout: 30_000 },
   );
@@ -66,7 +70,7 @@ describe("media timeline integration", () => {
     );
     expect(largestGap).toBeLessThanOrEqual(0.023);
     const detection = spawnSync(
-        "ffmpeg",
+        ffmpegBinary,
         ["-hide_banner", "-nostats", "-i", output, "-map", "0:a:0", "-af", "silencedetect=noise=-50dB:d=0.05", "-f", "null", "-"],
         { encoding: "utf8", timeout: 30_000 },
       ),
@@ -89,7 +93,7 @@ describe("media timeline integration", () => {
       output,
     ]);
     const result = spawnSync(
-      "ffprobe",
+      ffprobeBinary,
       ["-v", "error", "-show_entries", "stream=index,codec_type:packet=stream_index,pts_time", "-of", "json", output],
       { encoding: "utf8", timeout: 30_000 },
     );
