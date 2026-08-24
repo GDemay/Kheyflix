@@ -415,8 +415,9 @@ export default function StreamingPlayer({
   const showControls = useCallback(() => {
     setControls(true);
     if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (playing) hideTimer.current = setTimeout(() => setControls(false), 2800);
-  }, [playing]);
+    if (video.current && !video.current.paused)
+      hideTimer.current = setTimeout(() => setControls(false), 2800);
+  }, []);
   const toggle = useCallback(() => {
     const element = video.current;
     if (!element) return;
