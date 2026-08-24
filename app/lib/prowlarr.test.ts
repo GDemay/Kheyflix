@@ -104,4 +104,19 @@ describe("Prowlarr discovery", () => {
     expect(results).toHaveLength(1);
     expect(results[0].category).toBe("movie");
   });
+
+  it("omits movie releases that explicitly require compatibility conversion", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([
+      { title: "Direct.Movie.2026.1080p.WEB-DL.x264", magnetUrl: "magnet:?xt=urn:btih:DIRECT1" },
+      { title: "Converted.Movie.2026.1080p.HEVC.x265", magnetUrl: "magnet:?xt=urn:btih:HEVC001" },
+      { title: "Matroska.Movie.2026.1080p.mkv", magnetUrl: "magnet:?xt=urn:btih:MKV0001" },
+    ])));
+
+    const results = await searchProwlarr("Movie", { kind: "movie" });
+    expect(results.map((result) => result.title)).toEqual([
+      "Direct.Movie.2026.1080p.WEB-DL.x264",
+    ]);
+  });
 });
