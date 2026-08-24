@@ -17,6 +17,19 @@ const unique = (values: Array<string | undefined>) => [...new Set(values.filter(
 const firstMatch = (value: string, expressions: RegExp[]) =>
   expressions.map((expression) => value.match(expression)?.[1]).find(Boolean);
 
+const languageTags = [
+  { name: "German", token: "GERMAN|GER|DE|DEUTSCH", audioToken: "GERMAN|GER|DEUTSCH" },
+  { name: "English", token: "ENGLISH|ENG|EN", audioToken: "ENGLISH|ENG" },
+  { name: "French", token: "FRENCH|FRE|FR|TRUEFRENCH", audioToken: "FRENCH|FRE|TRUEFRENCH" },
+  { name: "Spanish", token: "SPANISH|SPA|ES|CASTELLANO", audioToken: "SPANISH|SPA|CASTELLANO" },
+  { name: "Italian", token: "ITALIAN|ITA|IT", audioToken: "ITALIAN|ITA" },
+  { name: "Portuguese", token: "PORTUGUESE|POR|PT|PTBR|BR", audioToken: "PORTUGUESE|POR|PTBR" },
+  { name: "Russian", token: "RUSSIAN|RUS", audioToken: "RUSSIAN|RUS" },
+  { name: "Ukrainian", token: "UKRAINIAN|UKR", audioToken: "UKRAINIAN|UKR" },
+  { name: "Norwegian", token: "NORWEGIAN|NOR", audioToken: "NORWEGIAN|NOR" },
+  { name: "Hindi", token: "HINDI|HIN", audioToken: "HINDI|HIN" },
+] as const;
+
 export function parseReleaseTitle(rawTitle: string): ReleaseMetadata {
   const normalized = rawTitle
     .replace(/^www\.[\w.-]+\s*-\s*/i, "")
@@ -46,29 +59,20 @@ export function parseReleaseTitle(rawTitle: string): ReleaseMetadata {
 
   const hasSubtitleTag = (names: string) =>
     new RegExp(`\\b(?:${names})[ ._-]*(?:SUBS?|SUBBED)\\b|\\bVOST(?:${names})\\b`, "i").test(normalized);
-  const germanSubs = hasSubtitleTag("GERMAN|GER|DE|DEUTSCH");
-  const englishSubs = hasSubtitleTag("ENGLISH|ENG|EN");
-  const frenchSubs = hasSubtitleTag("FRENCH|FRE|FR|TRUEFRENCH");
-  const spanishSubs = hasSubtitleTag("SPANISH|SPA|ES|CASTELLANO");
-  const italianSubs = hasSubtitleTag("ITALIAN|ITA|IT");
-  const portugueseSubs = hasSubtitleTag("PORTUGUESE|POR|PT|PTBR|BR");
   const multiSubs = /\bMULTI[ ._-]*SUBS?\b/i.test(normalized);
-  const subtitleLanguages = unique([
-    germanSubs ? "German" : undefined,
-    englishSubs ? "English" : undefined,
-    frenchSubs ? "French" : undefined,
-    spanishSubs ? "Spanish" : undefined,
-    italianSubs ? "Italian" : undefined,
-    portugueseSubs ? "Portuguese" : undefined,
-    multiSubs ? "Multiple" : undefined,
-  ]);
+  const subtitleLanguages = unique(languageTags.map(({ name, token }) =>
+    hasSubtitleTag(token) || (name === "English" && /\bE[ ._-]*SUBS?\b/i.test(normalized)) ||
+      (name === "Norwegian" && /\bNOR[ ._-]*TEKST\b/i.test(normalized))
+      ? name : undefined,
+  ).concat(multiSubs ? ["Multiple"] : []));
   const withoutSubtitleTags = normalized
-    .replace(/\b(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR|MULTI)[ ._-]*(?:SUBS?|SUBBED)\b|\bVOST(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR)\b/gi, " ");
-  const audioLanguages = unique([
-    /\b(?:GERMAN|DEUTSCH)\b/i.test(withoutSubtitleTags) ? "German" : undefined,
-    /\b(?:ENGLISH)\b/i.test(withoutSubtitleTags) ? "English" : undefined,
-    /\b(?:DUAL[ ._-]*AUDIO|MULTI(?:LINGUAL)?)\b/i.test(withoutSubtitleTags) ? "Multiple" : undefined,
-  ]);
+    .replace(/\b(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR|RUSSIAN|RUS|UKRAINIAN|UKR|NORWEGIAN|NOR|HINDI|HIN|MULTI)[ ._-]*(?:SUBS?|SUBBED|TEKST)\b|\bVOST(?:GERMAN|GER|DE|DEUTSCH|ENGLISH|ENG|EN|FRENCH|FRE|FR|TRUEFRENCH|SPANISH|SPA|ES|CASTELLANO|ITALIAN|ITA|IT|PORTUGUESE|POR|PT|PTBR|BR)\b|\bE[ ._-]*SUBS?\b/gi, " ");
+  const detectedAudioLanguages = unique(languageTags.map(({ name, audioToken }) =>
+    new RegExp(`\\b(?:${audioToken})\\b`, "i").test(withoutSubtitleTags) ? name : undefined,
+  ));
+  const audioLanguages = detectedAudioLanguages.length > 0
+    ? detectedAudioLanguages
+    : unique([/\b(?:DUAL[ ._-]*AUDIO|MULTI(?:LINGUAL)?)\b/i.test(withoutSubtitleTags) ? "Multiple" : undefined]);
 
   const technicalStart = normalized.search(
     /\b(?:S\d{1,2}E\d{1,3}|Season[ ._-]*\d{1,2}|(?:19|20)\d{2}|2160p|1080p|720p|480p|UHD|BluRay|BDRip|BRRip|WEB[ ._-]*DL|WEBRip|HDTV|DVDRip|x26[45]|h[ .]?26[45]|HEVC|AVC|AV1)\b/i,

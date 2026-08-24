@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 test("a prepared conversion-required movie never offers Watch", async ({ page }) => {
   await page.route("**/api/discovery/search?*", (route) =>
@@ -53,4 +54,101 @@ test("a prepared conversion-required movie never offers Watch", async ({ page })
 
   await expect(page.getByText("This release needs conversion and is not available for direct playback.")).toBeVisible({ timeout: 8_000 });
   await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(0);
+});
+
+test("language status is explicit and language filters are actionable", async ({ page }) => {
+  await page.route("**/api/discovery/search?*", (route) => route.fulfill({
+    json: {
+      results: [
+        {
+          id: "english",
+          title: "Example.Movie.2026.1080p.English.ESubs",
+          size: 2_000_000_000,
+          seeders: 12,
+          peers: 2,
+          source: "Test source",
+          category: "movie",
+          magnet: "magnet:?xt=urn:btih:ENGLISH",
+          metadata: { displayTitle: "Example Movie", year: 2026, resolution: "1080p", seasonPack: false, audioLanguages: ["English"], subtitleLanguages: ["English"] },
+        },
+        {
+          id: "italian",
+          title: "Example.Movie.2026.720p.ITA",
+          size: 1_000_000_000,
+          seeders: 8,
+          peers: 1,
+          source: "Test source",
+          category: "movie",
+          magnet: "magnet:?xt=urn:btih:ITALIAN",
+          metadata: { displayTitle: "Example Movie", year: 2026, resolution: "720p", seasonPack: false, audioLanguages: ["Italian"], subtitleLanguages: [] },
+        },
+        {
+          id: "unknown",
+          title: "Example.Movie.2026.1080p",
+          size: 3_000_000_000,
+          seeders: 4,
+          peers: 1,
+          source: "Test source",
+          category: "movie",
+          magnet: "magnet:?xt=urn:btih:UNKNOWN",
+          metadata: { displayTitle: "Example Movie", year: 2026, resolution: "1080p", seasonPack: false, audioLanguages: [], subtitleLanguages: [] },
+        },
+      ],
+    },
+  }));
+
+  await page.goto("/discover");
+  await page.getByLabel("Search connected sources").fill("Example Movie");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+
+  await expect(page.getByText("Audio: Not specified")).toBeVisible();
+  await expect(page.getByText("Subtitles: Not specified")).toHaveCount(2);
+  await expect(page.getByLabel("Filter by audio")).toContainText("English (1)");
+  await expect(page.getByLabel("Filter by subtitles")).toContainText("English (1)");
+
+  if ((page.viewportSize()?.width ?? 0) <= 700) {
+    const subtitleFilterWidth = await page.getByLabel("Filter by subtitles").evaluate((element) => element.getBoundingClientRect().width);
+    expect(subtitleFilterWidth).toBeGreaterThanOrEqual(260);
+  }
+
+  await page.getByLabel("Filter by subtitles").selectOption("English");
+  await expect(page.getByText("Showing 1 of 3 releases")).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByRole("article")).toHaveCount(3);
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page })
+    .disableRules(["color-contrast"])
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(accessibility.violations.filter(({ impact }) => impact === "serious" || impact === "critical")).toEqual([]);
+});
+
+test("unavailable language filters explain why they are disabled", async ({ page }) => {
+  await page.route("**/api/discovery/search?*", (route) => route.fulfill({
+    json: {
+      results: [{
+        id: "unknown",
+        title: "Example.Movie.2026.1080p",
+        size: 3_000_000_000,
+        seeders: 4,
+        peers: 1,
+        source: "Test source",
+        category: "movie",
+        magnet: "magnet:?xt=urn:btih:UNKNOWN",
+        metadata: { displayTitle: "Example Movie", year: 2026, resolution: "1080p", seasonPack: false, audioLanguages: [], subtitleLanguages: [] },
+      }],
+    },
+  }));
+
+  await page.goto("/discover");
+  await page.getByLabel("Search connected sources").fill("Example Movie");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+
+  await expect(page.getByLabel("Filter by audio")).toBeDisabled();
+  await expect(page.getByLabel("Filter by subtitles")).toBeDisabled();
+  await expect(page.getByText("No audio languages advertised by sources")).toBeVisible();
+  await expect(page.getByText("No subtitle languages advertised by sources")).toBeVisible();
 });
