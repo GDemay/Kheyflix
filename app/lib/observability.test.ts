@@ -86,12 +86,12 @@ describe("API observability", () => {
 
   it("emits a safe outcome event for every debrid route operation", async () => {
     const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const GET = observeApi("/api/debrid/stream/:id/:file", async () =>
-      new Response("media", { status: 206 }),
-    );
+    const upstream = new Response("media", { status: 206 });
+    const GET = observeApi("/api/debrid/stream/:id/:file", async () => upstream);
 
-    await GET(new Request("https://kheyflix.test/api/debrid/stream/1/0"));
+    const response = await GET(new Request("https://kheyflix.test/api/debrid/stream/1/0"));
 
+    expect(response).toBe(upstream);
     const events = output.mock.calls.map(([entry]) => JSON.parse(String(entry)).event);
     expect(events).toEqual([
       "debrid.stream.completed",

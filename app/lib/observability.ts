@@ -88,17 +88,17 @@ const correlatedResponse = async (
   requestId: string,
   durationMs: number,
 ) => {
-  const headers = new Headers(response.headers);
-  headers.set("x-request-id", requestId);
   const timing = `app;dur=${durationMs.toFixed(1)}`;
-  headers.set(
-    "server-timing",
-    headers.has("server-timing") ? `${headers.get("server-timing")}, ${timing}` : timing,
-  );
   if (
     response.status >= 400 &&
     response.headers.get("content-type")?.includes("application/json")
   ) {
+    const headers = new Headers(response.headers);
+    headers.set("x-request-id", requestId);
+    headers.set(
+      "server-timing",
+      headers.has("server-timing") ? `${headers.get("server-timing")}, ${timing}` : timing,
+    );
     const payload = await response.json() as { error?: Record<string, unknown> };
     if (payload.error && typeof payload.error === "object")
       payload.error.requestId = requestId;
@@ -112,12 +112,15 @@ const correlatedResponse = async (
       errorCode: typeof payload.error?.code === "string" ? payload.error.code : undefined,
     };
   }
+  response.headers.set("x-request-id", requestId);
+  response.headers.set(
+    "server-timing",
+    response.headers.has("server-timing")
+      ? `${response.headers.get("server-timing")}, ${timing}`
+      : timing,
+  );
   return {
-    response: new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    }),
+    response,
     errorCode: undefined,
   };
 };
