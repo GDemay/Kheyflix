@@ -43,3 +43,4 @@
 - 2026-08-24, independent clean-context verification: AC-1 through AC-6 PASS; AC-8 initially FAIL on native iOS path, repaired so native HLS now prewarms and switches from bootstrap directly to `bestAutoQuality`, then PASS on reinspection; AC-7 UNVERIFIABLE until deployment.
 - 2026-08-24, repaired exact candidate, `npm test`: PASS, 25 files / 147 tests. Two earlier concurrent runs hit the unchanged 5s transcoder-health timeout under verifier/live-service load; isolated test passed 2/2 and the clean full rerun passed.
 - 2026-08-24, repaired exact candidate, `npm run lint` and `npm run build`: PASS (existing chunk-size advisory only).
+- 2026-08-24, production `763f7c46`, real iOS 26.5 Safari Simulator: first frame and continuously advancing playback confirmed, but Auto fell from maximum to 720p after a native `waiting` event. Recorded as production-only AC-8 FAIL; follow-up removes the legacy automatic downgrade so Auto remains at the requested maximum quality.

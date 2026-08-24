@@ -28,7 +28,6 @@ import {
   availableQualities,
   bestAutoQuality,
   needsCompatiblePlayback,
-  nextAutoQuality,
   QualityMode,
   RenditionQuality,
   requiresMutedAutoplay,
@@ -267,7 +266,6 @@ export default function StreamingPlayer({
     shell = useRef<HTMLElement>(null),
     hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
     lastSaved = useRef(0),
-    lastQualitySwitch = useRef(0),
     startupRetries = useRef(0),
     playbackRequestedAt = useRef(0),
     firstFrameRecorded = useRef(false),
@@ -444,7 +442,6 @@ export default function StreamingPlayer({
       setOffset(target);
       setAudio(nextAudio);
       setRendition(nextQuality);
-      lastQualitySwitch.current = Date.now();
       setSession(newSessionToken());
     },
     [audio, duration, persist, rendition, stop],
@@ -482,15 +479,6 @@ export default function StreamingPlayer({
     });
   }, [navigate, next, persist, stop, transcoded]);
 
-  const adaptQuality = useCallback(
-    (direction: "up" | "down") => {
-      if (qualityMode !== "auto" || Date.now() - lastQualitySwitch.current < 12_000)
-        return;
-      const nextQuality = nextAutoQuality(rendition, direction, sourceHeight);
-      if (nextQuality !== rendition) restart(absoluteTime, audio, nextQuality);
-    },
-    [absoluteTime, audio, qualityMode, rendition, restart, sourceHeight],
-  );
   const restartRef = useRef(restart),
     absoluteTimeRef = useRef(absoluteTime);
   useEffect(() => {
@@ -666,7 +654,11 @@ export default function StreamingPlayer({
     const targetQuality = bestAutoQuality(sourceHeight);
     const standardSource = `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${offset}&quality=${targetQuality}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`;
     let cancelled = false;
-    console.info("[playback] preparing standard stream", { id, file, rendition });
+    console.info("[playback] preparing standard stream", {
+      id,
+      file,
+      rendition: targetQuality,
+    });
     void fetch(standardSource)
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -759,7 +751,6 @@ export default function StreamingPlayer({
         setCompatible(true);
         setBootstrap(false);
         setRendition(target);
-        lastQualitySwitch.current = Date.now();
         setSession(targetSession);
       } catch (reason) {
         autoUpgradeRequested.current = false;
@@ -885,7 +876,6 @@ export default function StreamingPlayer({
         }}
         onWaiting={() => {
           setLoading(true);
-          adaptQuality("down");
         }}
         onPlaying={() => {
           startupRetries.current = 0;
