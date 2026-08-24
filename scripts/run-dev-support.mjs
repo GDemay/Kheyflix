@@ -54,7 +54,7 @@ export const isKheyflixTranscoder = (port) =>
 export const isKheyflixApp = (port) =>
   new Promise((resolve) => {
     const request = http.get(
-      { hostname: "localhost", port, path: "/api/health", timeout: 750 },
+      { hostname: "localhost", port, path: "/api/health", timeout: 3_000 },
       (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -66,7 +66,7 @@ export const isKheyflixApp = (port) =>
             const health = JSON.parse(body);
             resolve(
               response.statusCode === 200 &&
-                health?.status === "ok" &&
+                (health?.status === "ok" || health?.status === "degraded") &&
                 health?.dependencies?.transcoder === true,
             );
           } catch {
@@ -106,7 +106,7 @@ export const resolveDevEnvironment = async (
       ...sourceEnv,
       PORT: appPort,
       KHEYFLIX_APP_ORIGIN:
-        sourceEnv.KHEYFLIX_APP_ORIGIN || `http://${host}:${appPort}`,
+        sourceEnv.KHEYFLIX_APP_ORIGIN || `http://localhost:${appPort}`,
       KHEYFLIX_TRANSCODER_PORT: transcoderPort,
       KHEYFLIX_TRANSCODER_URL:
         sourceEnv.KHEYFLIX_TRANSCODER_URL ||

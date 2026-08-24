@@ -20,6 +20,7 @@ import {
 import { EnrichedMetadata } from "./lib/metadata";
 import { parseWatchProgress, PlaybackQueueItem } from "./lib/watch-progress";
 import { Route } from "./routing";
+import { useDialogFocus } from "./lib/use-dialog-focus";
 import { playKheyflixSting } from "./lib/brand-sting";
 import { FAVORITES_KEY, friendsFirst, parseFavorites, toggleFavorite } from "./lib/favorites";
 import {
@@ -727,6 +728,11 @@ export function DebridDetails({
     [item],
   );
   const [season, setSeason] = useState<number>();
+  const dialog = useDialogFocus<HTMLElement>(onClose, {
+    active: Boolean(item && !loading && !error),
+    initialFocus: "button[aria-label='Close title details']",
+    restoreFocus: false,
+  });
   if (loading && !item)
     return (
       <div className="modal-backdrop">
@@ -764,6 +770,8 @@ export function DebridDetails({
         role="dialog"
         aria-modal="true"
         aria-labelledby="catalog-detail-title"
+        ref={dialog}
+        tabIndex={-1}
       >
         <button
           className="icon-button modal-close"

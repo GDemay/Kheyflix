@@ -43,4 +43,5 @@ test("the loader reveals a continuously advancing live catalog stream", async ({
     })
     .toBeGreaterThan(start + 3);
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 });

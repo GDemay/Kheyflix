@@ -30,6 +30,7 @@ import { parseRoute, Route, routePath } from "./routing";
 import StreamingPlayer from "./streaming-player";
 import { normalizeSearchQuery } from "./catalog-ux";
 import { playbackReturnRoute } from "./lib/player-navigation";
+import { useDialogFocus } from "./lib/use-dialog-focus";
 
 const subscribeToNothing = () => () => undefined;
 
@@ -68,13 +69,15 @@ export function Header({
   const [scrolled, setScrolled] = useState(false);
   const searchOpen = route.section === "search";
   const query = route.query ?? "";
-  const [searchDraft, setSearchDraft] = useState(query);
+  const searchInput = useRef<HTMLInputElement>(null);
   const submittedQuery = useRef(query);
   useEffect(() => {
-    if (query !== submittedQuery.current) setSearchDraft(query);
+    if (query !== submittedQuery.current && searchInput.current)
+      searchInput.current.value = query;
+    submittedQuery.current = query;
   }, [query]);
   const submit = (value: string) => {
-    setSearchDraft(value);
+    if (searchInput.current) searchInput.current.value = value;
     const normalized = normalizeSearchQuery(value);
     submittedQuery.current = normalized;
     navigate({ section: "search", query: normalized }, true);
@@ -130,9 +133,10 @@ export function Header({
       {searchOpen && <div className="header-search open">
         <Search size={19} />
         <input
+          ref={searchInput}
           aria-label="Search titles"
           placeholder="Movies and series"
-          value={searchDraft}
+          defaultValue={query}
           onChange={(e) => submit(e.target.value)}
           onFocus={() => {
             if (route.section !== "search")
@@ -228,15 +232,10 @@ function Details({
   onClose: () => void;
   onPlay: () => void;
 }) {
-  const dialog = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    dialog.current?.focus();
-    const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  const dialog = useDialogFocus<HTMLElement>(onClose, {
+    initialFocus: "button[aria-label='Close details']",
+    restoreFocus: false,
+  });
   return (
     <div
       className="modal-backdrop"
@@ -623,6 +622,19 @@ export default function KheyflixApp() {
           : previousRoute.current,
       true,
     );
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const target =
+          document.querySelector<HTMLElement>(
+            "input[aria-label='Search titles']",
+          ) ||
+          document.querySelector<HTMLElement>("[aria-current='page']") ||
+          document.querySelector<HTMLElement>(
+            "button[aria-label='Kheyflix home']",
+          );
+        target?.focus();
+      });
+    });
   }, [navigate]);
   const openTitle = (item: MediaTitle) =>
     navigate({ section: "title", id: item.id });
@@ -678,9 +690,16 @@ export default function KheyflixApp() {
         onBack={() => navigate(playerReturnRoute.current, true)}
       />
     );
+  const modalOpen =
+    route.section === "debrid" || (route.section === "title" && Boolean(item));
   return (
     <main className="app-shell">
-      <Header route={route} navigate={navigate} />
+      <div
+        className="app-background"
+        inert={modalOpen || undefined}
+        aria-hidden={modalOpen ? "true" : undefined}
+      >
+        <Header route={route} navigate={navigate} />
       {route.section === "home" && (
         <DebridExperience section="home" navigate={navigate} />
       )}
@@ -697,32 +716,18 @@ export default function KheyflixApp() {
       {route.section === "discover" && <DiscoveryPage navigate={navigate} />}
       {route.section === "profile" && <ProfilePage navigate={navigate} />}
       {route.section === "debrid" && (
-        <>
-          <div className="background-page catalog-backdrop" inert />
-          <DebridDetails
-            route={route}
-            navigate={navigate}
-            onClose={closeDetails}
-          />
-        </>
+        <div className="background-page catalog-backdrop" />
       )}
       {route.section === "title" && item && (
-        <>
-          <div className="background-page" inert>
-            <Hero
-              item={catalog[0]}
-              onInfo={() => openTitle(catalog[0])}
-              onPlay={() => navigate({ section: "watch", id: catalog[0].id })}
-            />
-          </div>
-          <Details
-            item={item}
-            onClose={closeDetails}
-            onPlay={() => navigate({ section: "watch", id: item.id })}
+        <div className="background-page">
+          <Hero
+            item={catalog[0]}
+            onInfo={() => openTitle(catalog[0])}
+            onPlay={() => navigate({ section: "watch", id: catalog[0].id })}
           />
-        </>
+        </div>
       )}
-      {route.section === "title" && !item && (
+      {(route.section === "title" || route.section === "watch") && !item && (
         <section className="not-found">
           <h1>Title not found</h1>
           <button onClick={() => navigate({ section: "home" })}>
@@ -740,6 +745,21 @@ export default function KheyflixApp() {
         <p>Movies and series, ready when you are.</p>
         <p>© 2026 Kheyflix · Proof of concept</p>
       </footer>
+      </div>
+      {route.section === "debrid" && (
+        <DebridDetails
+          route={route}
+          navigate={navigate}
+          onClose={closeDetails}
+        />
+      )}
+      {route.section === "title" && item && (
+        <Details
+          item={item}
+          onClose={closeDetails}
+          onPlay={() => navigate({ section: "watch", id: item.id })}
+        />
+      )}
     </main>
   );
 }
