@@ -144,10 +144,12 @@ export function groupDebridCatalog(
       const parsedTitle =
         seriesTitle(magnet.filename) ||
         seriesTitle(magnet.videoFiles[0]?.name || "Series");
-      const override = catalogOverride(
-        `${magnet.filename} ${magnet.videoFiles.map((file) => file.name).join(" ")}`,
-        "series",
-      );
+      const override =
+        catalogOverride(magnet.filename, "series") ||
+        catalogOverride(
+          magnet.videoFiles.map((file) => file.name).join(" "),
+          "series",
+        );
       const title = override?.title || parsedTitle;
       const year = override?.year || yearFrom(magnet.filename);
       const key = catalogIdentity(title, year);
