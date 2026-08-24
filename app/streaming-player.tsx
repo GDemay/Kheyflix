@@ -418,6 +418,14 @@ export default function StreamingPlayer({
     if (video.current && !video.current.paused)
       hideTimer.current = setTimeout(() => setControls(false), 2800);
   }, []);
+  useEffect(() => {
+    if (!controls || !playing || pausedByUser) return;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setControls(false), 2800);
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, [controls, pausedByUser, playing]);
   const toggle = useCallback(() => {
     const element = video.current;
     if (!element) return;

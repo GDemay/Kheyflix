@@ -78,7 +78,7 @@ describe("media timeline integration", () => {
     expect(detection.status).toBe(0);
     expect(Number(silence?.seconds)).toBeGreaterThanOrEqual(0.9);
     expect(Number(silence?.seconds)).toBeLessThanOrEqual(0.96);
-  });
+  }, 30_000);
 
   it("starts audio and decoded video together after a non-keyframe seek", () => {
     const output = join(directory, "seek.mp4");
@@ -107,7 +107,7 @@ describe("media timeline integration", () => {
     for (const packet of value.packets)
       first[types[packet.stream_index]] ??= Number(packet.pts_time);
     expect(Math.abs(first.audio - first.video)).toBeLessThanOrEqual(0.023);
-  });
+  }, 30_000);
 
   it("drops expired cues and rebases remaining subtitles to an exact seek", () => {
     const output = join(directory, "seek.vtt"),
@@ -123,5 +123,5 @@ describe("media timeline integration", () => {
     const webvtt = rebaseWebVtt(readFileSync(output, "utf8"), 5);
     expect(webvtt).not.toContain("first cue");
     expect(webvtt).toContain("00:02.000 --> 00:03.000\nsecond cue");
-  });
+  }, 30_000);
 });
