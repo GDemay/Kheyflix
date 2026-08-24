@@ -13,6 +13,11 @@ deployments. They currently use the same authorized AllDebrid/Prowlarr accounts,
 but values are stored separately so either environment can be rotated
 independently.
 
+Production runs the GitHub-backed `kheyflix` service. Staging runs the
+source-free `kheyflix-staging` service so new `main` commits cannot replace a
+candidate during pre-merge verification. Keep that staging service disconnected
+from GitHub and deploy it only through `npm run deploy:staging`.
+
 Each environment also runs an isolated instance of the `prowlarr-production`
 service on port 9696 with its own persistent `/config` volume. Kheyflix reaches
 the instance in its current environment through Railway's private network at
@@ -94,7 +99,7 @@ preventing a production-scoped token from accidentally being used for staging.
 Set secrets through stdin so values do not appear in shell history or output:
 
 ```sh
-printf '%s' "$ALLDEBRID_API_KEY" | railway variable set ALLDEBRID_API_KEY --stdin --service kheyflix --environment staging
+printf '%s' "$ALLDEBRID_API_KEY" | railway variable set ALLDEBRID_API_KEY --stdin --service kheyflix-staging --environment staging
 ```
 
 Repeat explicitly for each variable and environment. Verify only variable
@@ -103,10 +108,10 @@ names; Railway JSON variable output includes raw secret values.
 ## Observability and rollback
 
 ```sh
-railway deployment list --service kheyflix --environment staging --json
-railway logs --service kheyflix --environment staging --latest
-railway logs --http --service kheyflix --environment staging --status '>=400' --lines 100
-railway rollback --service kheyflix --environment staging
+railway deployment list --service kheyflix-staging --environment staging --json
+railway logs --service kheyflix-staging --environment staging --latest
+railway logs --http --service kheyflix-staging --environment staging --status '>=400' --lines 100
+railway rollback --service kheyflix-staging --environment staging
 ```
 
 Use `production` instead of `staging` for production incidents. The Railway

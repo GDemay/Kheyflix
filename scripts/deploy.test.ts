@@ -11,7 +11,7 @@ describe("deploymentArgs", () => {
         "--environment",
         "950f9a22-c5f2-43fd-ba54-9e11b446e336",
         "--service",
-        "1fb8e716-8ba7-4906-80fd-9226e0eeb43e",
+        "2f853515-80f0-45f9-afe0-9607ee0a0adf",
       ]),
     );
   });
