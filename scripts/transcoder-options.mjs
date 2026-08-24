@@ -7,9 +7,9 @@ const PROFILES = {
   "1080": { height: 1080, bitrate: "4500k", maxrate: "6000k", bufsize: "12000k" },
 };
 
-export function videoOutputOptions(codec = "", height = 0, allowCopy = false, quality = "compat") {
-  if ((quality === "original" || quality === "compat") && BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];
-  if ((quality === "original" || quality === "compat") && allowCopy && codec.toLowerCase() === "hevc")
+export function videoOutputOptions(codec = "", height = 0, allowCopy = false, quality = "compat", preciseSeek = false) {
+  if (!preciseSeek && (quality === "original" || quality === "compat") && BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];
+  if (!preciseSeek && (quality === "original" || quality === "compat") && allowCopy && codec.toLowerCase() === "hevc")
     return ["-c:v", "copy", "-tag:v", "hvc1"];
 
   const profile = PROFILES[quality];
@@ -64,7 +64,7 @@ export function subtitleTimelineOptions(value) {
   const timestamp = String(seconds);
   return {
     input: ["-ss", timestamp, "-copyts"],
-    output: ["-ss", timestamp, "-output_ts_offset", `-${timestamp}`],
+    output: [],
   };
 }
 

@@ -40,6 +40,15 @@ describe("compatible playback transcoder options", () => {
     ]);
   });
 
+  it("decodes through an exact seek instead of copying from an earlier keyframe", () => {
+    expect(videoOutputOptions("h264", 1080, false, "original", true)).toEqual(
+      expect.arrayContaining(["-c:v", "libx264"]),
+    );
+    expect(videoOutputOptions("hevc", 1080, true, "original", true)).toEqual(
+      expect.arrayContaining(["-c:v", "libx264"]),
+    );
+  });
+
   it.each([
     ["bootstrap", "scale=-2:240", "280k"],
     ["480", "scale=-2:480", "900k"],
@@ -91,7 +100,7 @@ describe("compatible playback transcoder options", () => {
     expect(subtitleTimelineOptions(0)).toEqual({ input: [], output: [] });
     expect(subtitleTimelineOptions(125.5)).toEqual({
       input: ["-ss", "125.5", "-copyts"],
-      output: ["-ss", "125.5", "-output_ts_offset", "-125.5"],
+      output: [],
     });
   });
 });

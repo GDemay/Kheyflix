@@ -17,7 +17,7 @@
 | ID | Observable requirement | Test/evidence | Status |
 |---|---|---|---|
 | AC-1 | Transcoded audio follows the source timeline from time zero and continuously compensates timestamp gaps/drift. | Deterministic FFmpeg fixture packet analysis plus option unit test. | local pass |
-| AC-2 | HLS and fragmented MP4 preserve A/V timing within one video frame or one AAC frame at start and after a seek. | Integration sync verifier over synthetic fixtures and sampled real catalog inputs. | local pass; production pending |
+| AC-2 | HLS and fragmented MP4 preserve source-relative audible/video content timing within one video frame or one AAC frame at start and after a seek. | Integration sync verifier with delayed audio, discontinuities, and a non-keyframe seek; sampled real catalog inputs. | repaired local pass; production pending |
 | AC-3 | Text subtitle cues are rebased to the exact playback seek origin and remain aligned after seeking. | Deterministic WebVTT cue integration assertions. | local pass |
 | AC-4 | Existing neutral/manual audio correction behavior composes with automatic reconciliation without unsafe values. | Unit tests for generated FFmpeg filter chain. | local pass |
 | AC-5 | A real movie and real series decode and advance on laptop and iPhone paths after deployment, with packet-level sync sampling passing. | Independent verification, CI, production playback suite, and production verifier. | pending |
@@ -35,3 +35,5 @@
 - 2026-08-24 RED: subtitle option test failed because no timestamp-preserving seek/rebase contract existed; baseline FFmpeg command emitted an expired cue and placed the next cue three seconds late after a five-second seek.
 - 2026-08-24 GREEN: focused option and FFmpeg integration tests passed (20/20); a deliberate 200ms audio packet gap was reduced to at most 22ms and a cue at source 7s became exactly 2s after a 5s seek.
 - 2026-08-24 local quality: `npm test` 152/152, `npm run lint` pass, `npm run build` pass.
+- 2026-08-24 independent candidate review `e9333da2`: FAIL. It reproduced a 300ms non-keyframe seek error caused by copied video and confirmed that an active subtitle cue was dropped by output seeking. AC-5 remained unverifiable before delivery.
+- 2026-08-24 repair RED/GREEN: exact-seek mode now forbids video stream copy; a 5.3s non-keyframe integration seek starts decoded video and audio within 23ms. Subtitle extraction preserves source cue timestamps and a streaming WebVTT transform clips/rebases active and future cues; focused tests pass 24/24. Delayed audible content remains at 0.90–0.96s for a 0.916583s source offset while packet gaps remain at most 23ms.
