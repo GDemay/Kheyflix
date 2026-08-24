@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
+  isKheyflixApp,
   resolveDevEnvironment,
 } from "./run-dev-support.mjs";
 
@@ -57,6 +58,31 @@ const serveHealthyTranscoder = async (port = 0) => {
   return (server.address() as { port: number }).port;
 };
 
+const serveAppHealth = async (
+  status: "ok" | "degraded",
+  port = 0,
+  delay = 0,
+) => {
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    setTimeout(
+      () =>
+        socket.end(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" +
+            JSON.stringify({ status, dependencies: { transcoder: true } }),
+        ),
+      delay,
+    );
+  });
+  servers.push(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "::1", resolve);
+  });
+  return (server.address() as { port: number }).port;
+};
+
 describe("development process environment", () => {
   test("does not start a duplicate when the Kheyflix app is already healthy", async () => {
     const appProbe = async () => true;
@@ -65,6 +91,12 @@ describe("development process environment", () => {
 
     expect(result.startApp).toBe(false);
     expect(result.env.PORT).toBe("3000");
+  });
+
+  test("recognizes a running Kheyflix app whose optional discovery service is degraded", async () => {
+    const appPort = await serveAppHealth("degraded", 0, 1_000);
+
+    await expect(isKheyflixApp(appPort)).resolves.toBe(true);
   });
 
   test("reuses a healthy Kheyflix transcoder on the default port", async () => {
@@ -93,7 +125,7 @@ describe("development process environment", () => {
 
     expect(startTranscoder).toBe(true);
     expect(env.PORT).toBe("3000");
-    expect(env.KHEYFLIX_APP_ORIGIN).toBe("http://127.0.0.1:3000");
+    expect(env.KHEYFLIX_APP_ORIGIN).toBe("http://localhost:3000");
     expect(env.KHEYFLIX_TRANSCODER_PORT).not.toBe(String(defaultPort));
     expect(env.KHEYFLIX_TRANSCODER_URL).toBe(
       `http://127.0.0.1:${env.KHEYFLIX_TRANSCODER_PORT}`,

@@ -75,6 +75,20 @@ const configuration = () => {
   return { baseUrl: url.toString().replace(/\/$/, ""), apiKey };
 };
 
+export async function isProwlarrReady() {
+  try {
+    const { baseUrl, apiKey } = configuration();
+    const response = await fetch(new URL(`${baseUrl}/api/v1/health`), {
+      headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(2_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 const categoryFor = (release: ProwlarrRelease) => {
   const categories = release.categories || [];
   if (categories.some((category) => Math.floor(Number(category.id) / 1000) === 5 || /\btv\b/i.test(category.name || "")))

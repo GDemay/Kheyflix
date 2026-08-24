@@ -100,5 +100,22 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await expect(page.getByRole("button", { name: "1×" })).toHaveClass(/active/);
   await expect(page.getByRole("button", { name: "Voice earlier" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Voice later" })).toBeVisible();
+  await settings.getByRole("button", { name: "480p Data saver" }).click();
+  await expect(
+    settings.getByRole("button", { name: "480p Data saver" }),
+  ).toHaveClass(/active/);
+  await page.getByRole("button", { name: "Playback settings" }).click();
+  await expect
+    .poll(() => video.evaluate((element) => element.readyState), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(2);
+  const qualitySwitchStart = await video.evaluate((element) => element.currentTime);
+  await expect
+    .poll(() => video.evaluate((element) => element.currentTime), {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(qualitySwitchStart + 3);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });

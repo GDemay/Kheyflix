@@ -343,6 +343,7 @@ export default function StreamingPlayer({
     [error, setError] = useState(false),
     [errorMessage, setErrorMessage] = useState(""),
     [providerReady, setProviderReady] = useState(false),
+    [preflightAttempt, setPreflightAttempt] = useState(0),
     [controls, setControls] = useState(true);
   const transcoded = compatible || rendition !== "original",
     activeQuality = bootstrap ? "bootstrap" : rendition,
@@ -535,6 +536,12 @@ export default function StreamingPlayer({
     };
   }, [activeSession, file, id, stop, transcoded]);
   useEffect(() => {
+    if (!transcoded) return;
+    const stopOnPageHide = () => stop(activeSession);
+    window.addEventListener("pagehide", stopOnPageHide);
+    return () => window.removeEventListener("pagehide", stopOnPageHide);
+  }, [activeSession, stop, transcoded]);
+  useEffect(() => {
     const controller = new AbortController();
     void fetch(`/api/debrid/stream/${id}/${file}`, {
       method: "HEAD",
@@ -567,7 +574,7 @@ export default function StreamingPlayer({
         setError(true);
       });
     return () => controller.abort();
-  }, [file, id]);
+  }, [file, id, preflightAttempt]);
   useEffect(() => {
     const request = mediaRequests.current.begin();
     const controller = new AbortController();
@@ -902,7 +909,13 @@ export default function StreamingPlayer({
               "The stream did not become playable. Your place has been saved."}
           </p>
           <div>
-            <button onClick={() => restart(absoluteTime)}>
+            <button
+              onClick={() => {
+                setProviderReady(false);
+                setPreflightAttempt((attempt) => attempt + 1);
+                restart(absoluteTime);
+              }}
+            >
               <RotateCcw />
               Retry
             </button>

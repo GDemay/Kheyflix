@@ -21,6 +21,7 @@ const jobs = new Map(),
   subtitleJobs = new Set();
 const MAX_JOBS = Math.max(2, Number(process.env.KHEYFLIX_MAX_JOBS || 2)),
   BOOTSTRAP_CACHE_TTL_MS = 10 * 60_000,
+  ABANDONED_JOB_TTL_MS = 30_000,
   MAX_PROBE_JOBS = 4,
   MAX_PROBES = 128,
   PROBE_TTL_MS = 30 * 60_000,
@@ -34,6 +35,34 @@ const MAX_JOBS = Math.max(2, Number(process.env.KHEYFLIX_MAX_JOBS || 2)),
   ]);
 const activeHlsJobs = () =>
   Array.from(hlsJobs.values()).filter((job) => job.child.exitCode === null).length;
+const activeJobs = () => jobs.size + activeHlsJobs() + subtitleJobs.size;
+const reclaimPlaybackCapacity = () => {
+  while (activeJobs() >= MAX_JOBS) {
+    const staleBefore = Date.now() - ABANDONED_JOB_TTL_MS;
+    const candidateToken = [
+      ...Array.from(hlsJobs.entries())
+      .filter(
+        ([token, job]) =>
+          job.child.exitCode === null &&
+          (job.cacheable || (jobTouched.get(token) || 0) < staleBefore),
+      )
+      .map(([token]) => token),
+      ...Array.from(jobs.entries())
+        .filter(
+          ([token, child]) =>
+            child.exitCode === null &&
+            (jobTouched.get(token) || 0) < staleBefore,
+        )
+        .map(([token]) => token),
+    ].sort(
+      (left, right) =>
+        (jobTouched.get(left) || 0) - (jobTouched.get(right) || 0),
+    )[0];
+    if (!candidateToken) return false;
+    stopJob(candidateToken, true);
+  }
+  return true;
+};
 const inputFor = (id, file) => `${appOrigin}/api/debrid/stream/${id}/${file}`;
 const stopJob = (token, force = false) => {
   const child = jobs.get(token);
@@ -182,9 +211,16 @@ function normalizeProbe(raw) {
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
-    if (url.pathname === "/health")
+    if (url.pathname === "/health") {
+      const appOriginReachable = await fetch(inputFor("health", "0"), {
+        method: "HEAD",
+        signal: AbortSignal.timeout(1_500),
+      })
+        .then((upstream) => upstream.status === 400)
+        .catch(() => false);
       return json(response, 200, {
-        ok: true,
+        ok: appOriginReachable,
+        appOrigin: appOriginReachable,
         service: "kheyflix-transcoder",
         jobs: jobs.size + activeHlsJobs() + subtitleJobs.size,
         cachedBootstraps: Array.from(hlsJobs.values()).filter(
@@ -192,6 +228,7 @@ const server = http.createServer(async (request, response) => {
         ).length,
         probes: probeRequests.size,
       });
+    }
     const stop = url.pathname.match(/^\/stop\/([a-z0-9-]+)$/i);
     if (stop) {
       stopJob(stop[1]);
@@ -216,7 +253,7 @@ const server = http.createServer(async (request, response) => {
       if (!job) {
         if (asset !== "master.m3u8")
           return json(response, 404, { error: "HLS session not found." });
-        if (jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
+        if (!reclaimPlaybackCapacity())
           return json(response, 429, {
             error: "The playback service is busy. Try again shortly.",
           });
@@ -308,7 +345,7 @@ const server = http.createServer(async (request, response) => {
       /^\/subtitle\/(\d+)\/(\d+)\/(\d+)\.vtt$/,
     );
     if (subtitle) {
-      if (jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
+      if (!reclaimPlaybackCapacity())
         return json(response, 429, {
           error: "The playback service is busy. Try again shortly.",
         });
@@ -363,7 +400,7 @@ const server = http.createServer(async (request, response) => {
     const token = url.searchParams.get("token") || crypto.randomUUID(),
       existing = jobs.get(token);
     if (existing && !existing.killed) existing.kill("SIGKILL");
-    if (!existing && jobs.size + activeHlsJobs() + subtitleJobs.size >= MAX_JOBS)
+    if (!existing && !reclaimPlaybackCapacity())
       return json(response, 429, {
         error: "The playback service is busy. Try again shortly.",
       });
