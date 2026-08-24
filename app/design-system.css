@@ -51,6 +51,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .app-header nav button.active { font-weight: 500; }
 .app-header nav button.active::after { display: none; }
 .header-search { border-radius: 0; }
+.app-header > .icon-button { margin-left: auto; }
 .icon-button { border-radius: 50%; }
 
 .featured-hero, .debrid-hero {

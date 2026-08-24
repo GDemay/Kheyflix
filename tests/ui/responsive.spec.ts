@@ -24,6 +24,21 @@ test("home remains within every supported viewport", async ({ page }) => {
   expect(geometry.hero?.width).toBeGreaterThanOrEqual(geometry.viewport - 20);
 });
 
+test("profile is the rightmost desktop header control", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) <= 700, "desktop header layout");
+  const geometry = await page.evaluate(() => {
+    const header = document.querySelector(".app-header")!.getBoundingClientRect();
+    const profile = document.querySelector(".app-header .profile")!.getBoundingClientRect();
+    const controls = [...document.querySelectorAll<HTMLElement>(".app-header button")]
+      .filter((control) => getComputedStyle(control).display !== "none")
+      .map((control) => ({ label: control.getAttribute("aria-label"), right: control.getBoundingClientRect().right }));
+    return { headerRight: header.right, profileRight: profile.right, controls };
+  });
+
+  expect(geometry.headerRight - geometry.profileRight).toBeLessThanOrEqual(65);
+  expect(geometry.profileRight).toBe(Math.max(...geometry.controls.map(({ right }) => right)));
+});
+
 test("primary controls meet touch-target and visibility requirements", async ({ page }) => {
   const narrow = (page.viewportSize()?.width ?? 0) <= 700;
   const play = page.getByRole("button", { name: "Play" }).first();

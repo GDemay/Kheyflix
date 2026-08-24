@@ -956,8 +956,12 @@ export default function StreamingPlayer({
           Tap to play
         </button>
       )}
-      {pausedByUser && !error && (
-        <div className="pause-overlay" aria-label="Playback paused">
+      {(pausedByUser || (controls && playing)) && !error && (
+        <div
+          className="pause-overlay"
+          role="group"
+          aria-label={pausedByUser ? "Playback paused" : "Playback quick controls"}
+        >
           <button
             aria-label="Back 10 seconds"
             onClick={() => seek(displayTime - 10)}
@@ -965,8 +969,12 @@ export default function StreamingPlayer({
             <RotateCcw />
             <span>10</span>
           </button>
-          <button className="pause-overlay-play" aria-label="Play" onClick={toggle}>
-            <Play fill="currentColor" />
+          <button
+            className="pause-overlay-play"
+            aria-label={playing ? "Pause" : "Play"}
+            onClick={toggle}
+          >
+            {playing ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}
           </button>
           <button
             aria-label="Forward 10 seconds"

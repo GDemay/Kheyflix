@@ -162,3 +162,36 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });
+
+test("pointer movement reveals central playback quick controls", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
+
+  const shell = page.locator("main.player-shell");
+  const video = page.locator("video");
+  await expect(video).toBeVisible();
+  await expect
+    .poll(() => shell.getAttribute("data-first-frame-ms"), { timeout: 30_000 })
+    .not.toBeNull();
+  if (await video.evaluate((element) => element.paused))
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect.poll(() => video.evaluate((element) => element.paused)).toBe(false);
+
+  await page.mouse.move(1200, 180);
+  await expect(shell).not.toHaveClass(/controls-visible/, { timeout: 5_000 });
+  await page.mouse.move(640, 360);
+  const quickControls = page.getByRole("group", {
+    name: "Playback quick controls",
+  });
+  await expect(quickControls).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Back 10 seconds" }),
+  ).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Pause", exact: true }),
+  ).toBeVisible();
+  await expect(
+    quickControls.getByRole("button", { name: "Forward 10 seconds" }),
+  ).toBeVisible();
+  await expect(quickControls).toBeHidden({ timeout: 5_000 });
+});
