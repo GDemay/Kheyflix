@@ -29,7 +29,10 @@ import DiscoveryPage from "./discovery-page";
 import { parseRoute, Route, routePath } from "./routing";
 import StreamingPlayer from "./streaming-player";
 import { normalizeSearchQuery } from "./catalog-ux";
-import { playbackReturnRoute } from "./lib/player-navigation";
+import {
+  playbackExitRoute,
+  playbackReturnRoute,
+} from "./lib/player-navigation";
 import { useDialogFocus } from "./lib/use-dialog-focus";
 
 const subscribeToNothing = () => () => undefined;
@@ -687,7 +690,15 @@ export default function KheyflixApp() {
         key={`${route.id}-${route.file}`}
         route={route}
         navigate={navigate}
-        onBack={() => navigate(playerReturnRoute.current, true)}
+        onBack={() =>
+          navigate(
+            playbackExitRoute(
+              window.history.state?.kheyflixReturn,
+              playerReturnRoute.current,
+            ),
+            true,
+          )
+        }
       />
     );
   const modalOpen =
