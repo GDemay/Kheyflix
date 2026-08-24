@@ -16,9 +16,9 @@
 ## Acceptance criteria
 | ID | Observable requirement | Test/evidence | Status |
 |---|---|---|---|
-| AC-1 | A newer run cancels an in-progress older run for the same PR or main delivery lane. | Workflow policy unit test and GitHub Actions run evidence | local pass |
-| AC-2 | Independent PRs do not cancel one another. | Workflow concurrency key contains workflow plus ref | local pass |
-| AC-3 | Genuine lint, test, build, production health, and playback failures remain blocking. | Workflow inspection, local quality gates, and CI | local pass |
+| AC-1 | A newer run cancels an in-progress older run for the same PR or main delivery lane. | Workflow policy unit test and GitHub Actions run evidence | pass |
+| AC-2 | Independent PRs do not cancel one another. | Workflow concurrency key contains workflow plus ref | pass |
+| AC-3 | Genuine lint, test, build, production health, and playback failures remain blocking. | Workflow inspection, local quality gates, and CI | pass |
 
 ## Risk and release
 - Security/privacy/data risks: none; no secret or permission changes.
@@ -32,3 +32,4 @@
 - 2026-08-24, local candidate: focused policy test RED on missing concurrency configuration, then GREEN after implementation.
 - 2026-08-24, local candidate: lint passed; 26 test files / 150 tests passed; production build passed.
 - 2026-08-24, independent local verification: AC-2 PASS and AC-3 PASS; AC-1 structurally correct but UNVERIFIABLE until exercised in GitHub Actions.
+- 2026-08-24, GitHub Actions: same-ref run `32760032272` was cancelled when newer run `32760038154` started; the newer exact-head run passed.
