@@ -163,7 +163,8 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });
 
-test("pointer movement reveals central playback quick controls", async ({ page }) => {
+test("pointer movement reveals central playback quick controls", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "laptop", "mouse-specific desktop behavior");
   test.setTimeout(60_000);
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
