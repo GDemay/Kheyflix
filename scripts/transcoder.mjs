@@ -6,8 +6,10 @@ import { join } from "node:path";
 import {
   audioSyncOptions,
   selectedStreamIndex,
+  subtitleTimelineOptions,
   videoOutputOptions,
 } from "./transcoder-options.mjs";
+import { createWebVttRebaseTransform } from "./subtitle-timeline.mjs";
 
 const port = Number(process.env.KHEYFLIX_TRANSCODER_PORT || 3101),
   appOrigin = process.env.KHEYFLIX_APP_ORIGIN || "http://localhost:3000";
@@ -286,6 +288,7 @@ const server = http.createServer(async (request, response) => {
             media.video[0]?.height || 0,
             false,
             quality,
+            start > 0,
           ),
           "-c:a",
           "aac",
@@ -352,7 +355,8 @@ const server = http.createServer(async (request, response) => {
       const subtitleStart = Math.max(
         0,
         Number(url.searchParams.get("start") || 0),
-      );
+      ),
+        subtitleTimeline = subtitleTimelineOptions(subtitleStart);
       const info = await probeMedia(subtitle[1], subtitle[2]),
         track = info.subtitles.find(
           (item) => item.index === Number(subtitle[3]),
@@ -367,9 +371,10 @@ const server = http.createServer(async (request, response) => {
           "-hide_banner",
           "-loglevel",
           "error",
-          ...(subtitleStart ? ["-ss", String(subtitleStart)] : []),
+          ...subtitleTimeline.input,
           "-i",
           inputFor(subtitle[1], subtitle[2]),
+          ...subtitleTimeline.output,
           "-map",
           `0:${subtitle[3]}`,
           "-f",
@@ -383,7 +388,9 @@ const server = http.createServer(async (request, response) => {
         "Content-Type": "text/vtt; charset=utf-8",
         "Cache-Control": "private, max-age=86400",
       });
-      child.stdout.pipe(response);
+      child.stdout
+        .pipe(createWebVttRebaseTransform(subtitleStart))
+        .pipe(response);
       child.once("close", () => subtitleJobs.delete(child));
       child.once("error", () => subtitleJobs.delete(child));
       response.on("close", () => {
@@ -429,7 +436,7 @@ const server = http.createServer(async (request, response) => {
       ...(subtitleStream && /^\d+$/.test(subtitleStream)
         ? ["-map", `0:${subtitleStream}?`]
         : []),
-      ...videoOutputOptions(videoCodec, videoHeight, copyVideo, quality),
+      ...videoOutputOptions(videoCodec, videoHeight, copyVideo, quality, start > 0),
       "-c:a",
       "aac",
       "-b:a",

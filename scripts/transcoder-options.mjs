@@ -7,9 +7,9 @@ const PROFILES = {
   "1080": { height: 1080, bitrate: "4500k", maxrate: "6000k", bufsize: "12000k" },
 };
 
-export function videoOutputOptions(codec = "", height = 0, allowCopy = false, quality = "compat") {
-  if ((quality === "original" || quality === "compat") && BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];
-  if ((quality === "original" || quality === "compat") && allowCopy && codec.toLowerCase() === "hevc")
+export function videoOutputOptions(codec = "", height = 0, allowCopy = false, quality = "compat", preciseSeek = false) {
+  if (!preciseSeek && (quality === "original" || quality === "compat") && BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];
+  if (!preciseSeek && (quality === "original" || quality === "compat") && allowCopy && codec.toLowerCase() === "hevc")
     return ["-c:v", "copy", "-tag:v", "hvc1"];
 
   const profile = PROFILES[quality];
@@ -57,16 +57,26 @@ export function selectedStreamIndex(value, fallback = 1) {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
+export function subtitleTimelineOptions(value) {
+  const parsed = Number(value);
+  const seconds = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  if (!seconds) return { input: [], output: [] };
+  const timestamp = String(seconds);
+  return {
+    input: ["-ss", timestamp, "-copyts"],
+    output: [],
+  };
+}
+
 export function audioSyncOptions(value) {
   const parsed = Number(value);
   const seconds = Number.isFinite(parsed)
     ? Math.max(-5, Math.min(5, Math.round(parsed * 10) / 10))
     : 0;
-  if (!seconds) return [];
+  const filters = ["aresample=async=1000:first_pts=0"];
   if (seconds > 0)
-    return ["-af", `adelay=${Math.round(seconds * 1000)}:all=1`];
-  return [
-    "-af",
-    `atrim=start=${Math.abs(seconds)},asetpts=PTS-STARTPTS`,
-  ];
+    filters.push(`adelay=${Math.round(seconds * 1000)}:all=1`);
+  else if (seconds < 0)
+    filters.push(`atrim=start=${Math.abs(seconds)}`, "asetpts=PTS-STARTPTS");
+  return ["-af", filters.join(",")];
 }
