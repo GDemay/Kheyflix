@@ -40,3 +40,6 @@ export const needsCompatiblePlayback = (
 export const requiresMutedAutoplay = (userAgent = "") =>
   /(?:iPhone|iPad|iPod)/i.test(userAgent) ||
   (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent));
+
+export const usesBootstrapStream = (iosPlayback: boolean, bootstrap: boolean) =>
+  bootstrap && !iosPlayback;
