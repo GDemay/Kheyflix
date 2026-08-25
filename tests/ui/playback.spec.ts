@@ -237,10 +237,11 @@ test("pointer movement reveals unobtrusive playback chrome", async ({ page }, te
   await pauseButton.click();
   const pausedControls = page.getByRole("group", { name: "Playback paused" });
   await expect(pausedControls).toBeVisible();
-  await expect(pausedControls.getByRole("button", { name: "Play" })).toBeVisible();
   await expect(pausedControls.getByRole("button", { name: "Back 10 seconds" })).toBeVisible();
   await expect(pausedControls.getByRole("button", { name: "Forward 10 seconds" })).toBeVisible();
-  await pausedControls.getByRole("button", { name: "Play" }).click();
+  const centralTransport = pausedControls.locator(".pause-overlay-play");
+  await expect(centralTransport).toBeVisible();
+  await centralTransport.click();
   await page.mouse.move(700, 400);
   await expect(shell).toHaveClass(/controls-visible/);
   await expect(page.getByRole("group", { name: "Playback quick controls" })).toHaveCount(0);
