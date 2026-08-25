@@ -1,5 +1,5 @@
 import { AllDebridError } from '../../../../../lib/alldebrid';
-import { observeApi, publicErrorMessage, requestIdFor, writeLog } from '../../../../../lib/observability';
+import { observeApi, publicErrorMessage, writeRequestLog } from '../../../../../lib/observability';
 
 const handleGet=async(request:Request,{params}:{params:Promise<{id:string;file:string}>})=>{
   try{
@@ -16,7 +16,7 @@ const handleGet=async(request:Request,{params}:{params:Promise<{id:string;file:s
       async cancel(reason){await reader.cancel(reason).catch(()=>undefined);await stop()},
     });
     return new Response(body,{headers:{'Content-Type':'video/mp4','Cache-Control':'private, no-store','X-Kheyflix-Audio':'aac-stereo','X-Kheyflix-Quality':quality||'original'}});
-  }catch(error){const known=error instanceof AllDebridError?error:new AllDebridError('The compatible audio stream is temporarily unavailable.');writeLog('error','debrid.transcode.failed',{requestId:requestIdFor(request),code:known.code,status:known.status,error:error instanceof Error?error:new Error(String(error))});return Response.json({error:{code:known.code,message:publicErrorMessage(known.message,'The compatible audio stream is temporarily unavailable.')}},{status:known.status})}
+  }catch(error){const known=error instanceof AllDebridError?error:new AllDebridError('The compatible audio stream is temporarily unavailable.');writeRequestLog(known.status >= 500 ? 'error' : 'warn','debrid.transcode.failed',request,{code:known.code,status:known.status,error:error instanceof Error?error:new Error(String(error))});return Response.json({error:{code:known.code,message:publicErrorMessage(known.message,'The compatible audio stream is temporarily unavailable.')}},{status:known.status})}
 };
 
 const handlePost=async(request:Request)=>{const token=(new URL(request.url).searchParams.get('session')||'').replace(/[^a-z0-9-]/gi,'');if(!token)return Response.json({error:{code:'SESSION_REQUIRED',message:'Playback session is required.'}},{status:400});const base=process.env.KHEYFLIX_TRANSCODER_URL||'http://127.0.0.1:3101';await fetch(`${base}/stop/${token}`,{method:'POST'}).catch(()=>undefined);return new Response(null,{status:204})};

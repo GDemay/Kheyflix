@@ -9,11 +9,8 @@ Every public API response also returns `X-Request-Id` and `Server-Timing`.
 1. Copy the `Reference` shown in a user-facing error, or the `x-request-id`
    response header from browser developer tools.
 2. Search Railway logs for the exact `requestId`.
-3. Start with `http.request.completed`, then inspect provider events carrying the
-   same identifier, such as `discovery.search.failed` or
-   `debrid.operation.failed`.
-4. Use `deploymentCommit`, `route`, `status`, `errorCode`, and `durationMs` to
-   identify the affected deployment and failure boundary.
+3. Read the leading `message` (for example, `Search catalog failed (503)`) and
+   use `event`, `status`, `errorCode`, and `durationMs` for filtering.
 
 The browser console also emits structured discovery lifecycle events. These
 include search result counts, preparation start/acceptance, and correlated API
@@ -22,10 +19,11 @@ body, credentials, or unlocked provider URL.
 
 ## Event contract
 
-All server events contain `timestamp`, `level`, `event`, `service`,
-`environment`, and `deploymentCommit`. HTTP completion events add `requestId`,
-`method`, `route`, `status`, and `durationMs`; failed JSON responses also add
-`errorCode` when available.
+Every emitted event leads with a short `message`, followed by `level`, `event`,
+and the smallest useful context. API action events include `requestId`, method,
+status, and duration; failed JSON responses also include `errorCode` when
+available. Railway already supplies time, environment, service, and deployment
+context, so Kheyflix does not repeat those fields on every line.
 
 Provider and health events add only bounded operational metadata: result counts,
 cache state, dependency booleans, provider error type/code, or numeric resource
@@ -36,15 +34,18 @@ before they can appear in an API response.
 
 Expected severity:
 
-- `info`: successful requests and operations;
+- `info`: meaningful successful user operations;
 - `warn`: client errors, degraded optional dependencies, or recoverable states;
 - `error`: server/upstream failures and unhandled exceptions.
 
 ## Operational checks
 
-- A healthy request produces exactly one `http.request.completed` event.
+- One user action produces at most one application event.
+- Successful health probes, playback keepalives/stops, and byte-range responses
+  are intentionally silent; degraded health, failures, and slow actionable
+  operations remain visible.
 - A 5xx event must carry the same request ID as the response and user reference.
-- `/api/health` emits `health.check.completed` with dependency booleans and must
-  report the exact deployed commit in its response.
+- `/api/health` emits `health.check.completed` only when degraded and must report
+  the exact deployed commit in its response.
 - Never add request bodies, raw query strings, headers, magnets, or provider URLs
   to logging context.

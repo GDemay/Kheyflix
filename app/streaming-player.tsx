@@ -45,10 +45,6 @@ import {
   serializePlaybackPreferences,
 } from "./lib/playback-preferences";
 import { Route } from "./routing";
-import {
-  classifyProviderPreflightFailure,
-  ProviderPreflightHttpError,
-} from "./lib/provider-preflight";
 import { PlaybackRequestGate } from "./lib/player-navigation";
 
 type MediaInfo = {
@@ -71,6 +67,12 @@ type MediaInfo = {
     supported: boolean;
   }>;
 };
+
+class MediaInfoHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Media information is unavailable (HTTP ${status}).`);
+  }
+}
 const PROGRESS_KEY = "kheyflix:progress:v1",
   QUEUE_KEY = "kheyflix:playback-queue:v1",
   PREFERENCES_KEY = "kheyflix:playback-preferences:v1",
@@ -351,11 +353,10 @@ export default function StreamingPlayer({
     [loading, setLoading] = useState(true),
     [error, setError] = useState(false),
     [errorMessage, setErrorMessage] = useState(""),
-    [providerReady, setProviderReady] = useState(false),
-    [preflightAttempt, setPreflightAttempt] = useState(0),
+    [mediaInfoAttempt, setMediaInfoAttempt] = useState(0),
     [controls, setControls] = useState(true);
   const transcoded = compatible || rendition !== "original",
-    activeQuality = bootstrap ? "bootstrap" : rendition,
+    activeQuality = !transcoded ? "original" : bootstrap ? "bootstrap" : rendition,
     playbackOffset = bootstrap ? Math.floor(offset / 30) * 30 : offset,
     activeSession = bootstrap
       ? `bootstrap-${id}-${file}-${playbackOffset}`
@@ -364,11 +365,11 @@ export default function StreamingPlayer({
     duration = info?.duration || nativeDuration,
     absoluteTime = transcoded ? playbackOffset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
-  const source = providerReady && (mediaReady || (iosPlayback && bootstrap))
+  const source = (transcoded && bootstrap) || mediaReady
     ? iosPlayback && transcoded
       ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${bootstrap ? "" : `&sync=${preferences.audioSync}`}`
       : transcoded
-      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
+      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
   const playbackTitle = currentQueue?.seriesTitle
@@ -557,50 +558,15 @@ export default function StreamingPlayer({
     return () => window.removeEventListener("pagehide", stopOnPageHide);
   }, [activeSession, stop, transcoded]);
   useEffect(() => {
-    const controller = new AbortController();
-    void fetch(`/api/debrid/stream/${id}/${file}`, {
-      method: "HEAD",
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok)
-          throw new ProviderPreflightHttpError(response.status);
-        setProviderReady(true);
-      })
-      .catch((reason) => {
-        const failure = classifyProviderPreflightFailure(
-          reason,
-          controller.signal.aborted,
-        );
-        if (failure.action === "ignore") return;
-        if (failure.action === "continue") {
-          console.warn("[playback] provider preflight unavailable; continuing", {
-            id,
-            file,
-            reason,
-          });
-          setProviderReady(true);
-          return;
-        }
-        console.error("[playback] provider preflight failed", { id, file, reason });
-        setLoading(false);
-        setErrorMessage(failure.message);
-        setError(true);
-      });
-    return () => controller.abort();
-  }, [file, id, preflightAttempt]);
-  useEffect(() => {
     const request = mediaRequests.current.begin();
     const controller = new AbortController();
     void fetch(`/api/debrid/media/${id}/${file}`, {
       signal: controller.signal,
     })
-      .then((response) =>
-        response.ok
-          ? (response.json() as Promise<MediaInfo>)
-          : Promise.reject(),
-      )
+      .then((response) => {
+        if (!response.ok) throw new MediaInfoHttpError(response.status);
+        return response.json() as Promise<MediaInfo>;
+      })
       .then((value) => {
         if (!request.isCurrent()) return;
         setInfo(value);
@@ -648,12 +614,21 @@ export default function StreamingPlayer({
         if (saved > 0) setOffset(saved);
         setMediaReady(true);
       })
-      .catch(() => setMediaReady(true));
+      .catch((reason) => {
+        if (controller.signal.aborted) return;
+        if (reason instanceof MediaInfoHttpError) {
+          setLoading(false);
+          setErrorMessage(reason.message);
+          setError(true);
+          return;
+        }
+        setMediaReady(true);
+      });
     return () => {
       request.cancel();
       controller.abort();
     };
-  }, [file, id, identity, preferenceKey, route.compat]);
+  }, [file, id, identity, mediaInfoAttempt, preferenceKey, route.compat]);
   useEffect(() => {
     if (video.current)
       video.current.playbackRate = preferences.playbackRate;
@@ -735,7 +710,7 @@ export default function StreamingPlayer({
     return () => cancelAnimationFrame(frame);
   }, []);
   useEffect(() => {
-    if (iosPlayback || qualityMode !== "auto" || !playing || loading) return;
+    if (iosPlayback || !transcoded || qualityMode !== "auto" || !playing || loading) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       const target = bestAutoQuality(sourceHeight);
@@ -743,7 +718,10 @@ export default function StreamingPlayer({
       autoUpgradeRequested.current = true;
       const targetAt = absoluteTimeRef.current;
       const targetSession = newSessionToken();
-      const prewarm = `/api/debrid/transcode/${id}/${file}?session=${targetSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
+      const directUpgrade = target === "original" && !compatible;
+      const prewarm = directUpgrade
+        ? `/api/debrid/stream/${id}/${file}`
+        : `/api/debrid/transcode/${id}/${file}?session=${targetSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
       try {
         const response = await fetch(prewarm, {
           headers: { Range: "bytes=0-1048575" },
@@ -758,7 +736,7 @@ export default function StreamingPlayer({
         setErrorMessage("");
         setLocalTime(0);
         setOffset(targetAt);
-        setCompatible(true);
+        setCompatible(!directUpgrade);
         setBootstrap(false);
         setRendition(target);
         setSession(targetSession);
@@ -771,7 +749,7 @@ export default function StreamingPlayer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [audio, copyCompatibleVideo, file, id, iosPlayback, loading, playing, preferences.audioSync, qualityMode, rendition, sourceHeight]);
+  }, [audio, compatible, copyCompatibleVideo, file, id, iosPlayback, loading, playing, preferences.audioSync, qualityMode, rendition, sourceHeight, transcoded]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -1021,8 +999,7 @@ export default function StreamingPlayer({
           <div>
             <button
               onClick={() => {
-                setProviderReady(false);
-                setPreflightAttempt((attempt) => attempt + 1);
+                setMediaInfoAttempt((attempt) => attempt + 1);
                 restart(absoluteTime);
               }}
             >

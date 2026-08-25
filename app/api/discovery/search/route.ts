@@ -1,5 +1,5 @@
 import { ProwlarrError, searchProwlarr } from "../../../lib/prowlarr";
-import { observeApi, requestIdFor, writeLog } from "../../../lib/observability";
+import { observeApi, writeRequestLog } from "../../../lib/observability";
 
 const handleGet = async (request: Request) => {
   try {
@@ -15,8 +15,7 @@ const handleGet = async (request: Request) => {
         season: Number.isInteger(season) && season > 0 ? season : undefined,
         episode: Number.isInteger(episode) && episode > 0 ? episode : undefined,
       });
-    writeLog("info", "discovery.search.completed", {
-      requestId: requestIdFor(request),
+    writeRequestLog("info", "discovery.search.completed", request, {
       kind: kind === "movie" || kind === "series" ? kind : "all",
       resultCount: results.length,
     });
@@ -29,8 +28,7 @@ const handleGet = async (request: Request) => {
       error instanceof ProwlarrError
         ? error
         : new ProwlarrError("Discovery is temporarily unavailable.");
-    writeLog("error", "discovery.search.failed", {
-      requestId: requestIdFor(request),
+    writeRequestLog("error", "discovery.search.failed", request, {
       error: error instanceof Error ? error : new Error(String(error)),
       code: known.code,
       status: known.status,

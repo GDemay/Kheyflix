@@ -5,11 +5,15 @@ type ApiHandler<TArgs extends readonly unknown[]> = (
   ...args: TArgs
 ) => Response | Promise<Response>;
 
-const SERVICE = "kheyflix";
 const REQUEST_ID = /^[a-zA-Z0-9._:-]{1,96}$/;
 const CREDENTIAL_TEXT = /(?:token|cookie|session|credentials?|api[-_ ]?key|access[-_ ]?key|private[-_ ]?key|authorization|password|secret)\s*(?:[:=]|\s)\s*\S+/i;
 const SENSITIVE_KEY = /(?:authorization|cookie|token|credentials?|secret|password|api[-_]?key|access[-_]?key|private[-_]?key|magnet|url|uri|body|headers|query|title|filename|link)/i;
 const observedRequestIds = new WeakMap<Request, string>();
+const pendingRequestLogs = new WeakMap<Request, {
+  level: LogLevel;
+  event: string;
+  context: LogContext;
+}>();
 
 const sanitizedString = (value: string) => {
   if (/magnet:\?xt=/i.test(value)) return "[REDACTED_MAGNET]";
@@ -20,26 +24,26 @@ const sanitizedString = (value: string) => {
   return value.slice(0, 2_000);
 };
 
-const sanitizedValue = (value: unknown, depth = 0): unknown => {
+const sanitizedValue = (value: unknown, depth = 0, includeStack = false): unknown => {
   if (depth > 5) return "[TRUNCATED]";
   if (value instanceof Error)
     return {
       type: value.name,
       message: sanitizedString(value.message),
-      stack: value.stack ? sanitizedString(value.stack) : undefined,
+      ...(includeStack && value.stack ? { stack: sanitizedString(value.stack) } : {}),
     };
   if (typeof value === "string") return sanitizedString(value);
   if (typeof value === "number" || typeof value === "boolean" || value === null)
     return value;
   if (Array.isArray(value))
-    return value.slice(0, 50).map((item) => sanitizedValue(item, depth + 1));
+    return value.slice(0, 50).map((item) => sanitizedValue(item, depth + 1, includeStack));
   if (value && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .slice(0, 100)
         .map(([key, item]) => [
           key,
-          SENSITIVE_KEY.test(key) ? "[REDACTED]" : sanitizedValue(item, depth + 1),
+          SENSITIVE_KEY.test(key) ? "[REDACTED]" : sanitizedValue(item, depth + 1, includeStack),
         ]),
     );
   return String(value);
@@ -66,21 +70,62 @@ export const publicErrorMessage = (message: string, fallback: string) => {
 };
 
 export const writeLog = (level: LogLevel, event: string, context: LogContext = {}) => {
+  const sanitizedContext = sanitizedValue(context, 0, level === "error") as LogContext;
+  const suppliedMessage = typeof sanitizedContext.message === "string"
+    ? sanitizedContext.message
+    : undefined;
+  delete sanitizedContext.message;
   const entry = {
-    ...sanitizedValue(context) as LogContext,
-    timestamp: new Date().toISOString(),
+    message: suppliedMessage || event.replaceAll(".", " "),
     level,
     event,
-    service: SERVICE,
-    environment: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "development",
-    deploymentCommit:
-      process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || null,
+    ...sanitizedContext,
   };
   const serialized = JSON.stringify(entry);
   if (level === "error") console.error(serialized);
   else if (level === "warn") console.warn(serialized);
   else if (level === "debug") console.debug(serialized);
   else console.info(serialized);
+};
+
+const operationName = (route: string, method: string) => {
+  if (route === "/api/health") return "Check app health";
+  if (route === "/api/discovery/search") return "Search catalog";
+  if (route === "/api/metadata") return "Load title details";
+  if (route === "/api/debrid/magnets")
+    return method === "POST" ? "Add title" : "Load library";
+  if (route.includes("/api/debrid/stream"))
+    return method === "HEAD" ? "Check media source" : "Stream media";
+  if (route.includes("/api/debrid/media")) return "Inspect media";
+  if (route.includes("/api/debrid/transcode")) {
+    if (method === "PATCH") return "Keep compatible stream alive";
+    if (method === "POST") return "Stop compatible stream";
+    return "Stream compatible video";
+  }
+  if (route.includes("/api/debrid/hls")) return "Stream iPhone-compatible video";
+  if (route.includes("/api/debrid/subtitle")) return "Load subtitles";
+  return `${method} ${route}`;
+};
+
+const eventMessage = (event: string, request: Request, context: LogContext) => {
+  const status = typeof context.status === "number" ? ` (${context.status})` : "";
+  if (event === "health.check.completed")
+    return context.ready ? "App health check passed" : "App health check is degraded";
+  if (event === "discovery.search.completed") return "Catalog search completed";
+  if (event === "debrid.catalog.completed") return "Library loaded";
+  if (event === "debrid.magnet.upload.completed") return "Title added to library";
+  if (event === "metadata.lookup.degraded")
+    return "Title details unavailable; continuing without them";
+  return `${operationName(new URL(request.url).pathname, request.method)} failed${status}`;
+};
+
+export const writeRequestLog = (
+  level: LogLevel,
+  event: string,
+  request: Request,
+  context: LogContext = {},
+) => {
+  pendingRequestLogs.set(request, { level, event, context });
 };
 
 const correlatedResponse = async (
@@ -151,6 +196,7 @@ export const observeApi = <TArgs extends readonly unknown[]>(
   const correlated = await correlatedResponse(response, requestId, durationMs);
   const level = response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info";
   const completionContext = {
+    message: `${operationName(route, request.method)} ${response.status >= 400 ? "failed" : "succeeded"} (${response.status}) in ${durationMs.toFixed(1)} ms`,
     requestId,
     method: request.method,
     route,
@@ -159,14 +205,26 @@ export const observeApi = <TArgs extends readonly unknown[]>(
     ...(correlated.errorCode ? { errorCode: correlated.errorCode } : {}),
     ...(unhandled ? { error: unhandled } : {}),
   };
-  if (route.startsWith("/api/debrid/")) {
-    const resource = route.split("/")[3] || "operation";
-    writeLog(level, `debrid.${resource}.completed`, completionContext);
-  }
-  writeLog(
-    level,
-    "http.request.completed",
-    completionContext,
+  const routineSuccess = response.status < 400 && (
+    route === "/api/health" ||
+    (route.includes("/api/debrid/transcode") && ["PATCH", "POST"].includes(request.method)) ||
+    (route.includes("/api/debrid/stream") && response.status === 206 && request.headers.has("range"))
   );
+  const pending = pendingRequestLogs.get(request);
+  if (pending) {
+    const { code, ...domainContext } = pending.context;
+    writeLog(pending.level, pending.event, {
+      ...completionContext,
+      ...domainContext,
+      message: eventMessage(pending.event, request, {
+        ...pending.context,
+        status: response.status,
+      }),
+      ...(typeof code === "string" ? { errorCode: code } : {}),
+    });
+  } else if (!routineSuccess) {
+    writeLog(level, "http.request.completed", completionContext);
+  }
+  pendingRequestLogs.delete(request);
   return correlated.response;
 };

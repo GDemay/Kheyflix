@@ -214,11 +214,11 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
     if (url.pathname === "/health") {
-      const appOriginReachable = await fetch(inputFor("health", "0"), {
+      const appOriginReachable = await fetch(`${appOrigin}/`, {
         method: "HEAD",
         signal: AbortSignal.timeout(1_500),
       })
-        .then((upstream) => upstream.status === 400)
+        .then((upstream) => upstream.ok)
         .catch(() => false);
       return json(response, 200, {
         ok: appOriginReachable,

@@ -1,5 +1,5 @@
 import { AllDebridError } from "../../../../../../../lib/alldebrid";
-import { observeApi, publicErrorMessage, requestIdFor, writeLog } from "../../../../../../../lib/observability";
+import { observeApi, publicErrorMessage, writeRequestLog } from "../../../../../../../lib/observability";
 
 const ASSETS = /^(?:master\.m3u8|segment\d+\.ts)$/;
 
@@ -53,8 +53,7 @@ const handleGet = async (
       error instanceof AllDebridError
         ? error
         : new AllDebridError("The iOS-compatible stream is unavailable.");
-    writeLog("error", "debrid.hls.failed", {
-      requestId: requestIdFor(request),
+    writeRequestLog(known.status >= 500 ? "error" : "warn", "debrid.hls.failed", request, {
       code: known.code,
       status: known.status,
       error: error instanceof Error ? error : new Error(String(error)),

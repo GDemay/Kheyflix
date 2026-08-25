@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeApi, publicErrorMessage, writeLog } from "./observability";
+import { observeApi, publicErrorMessage, writeLog, writeRequestLog } from "./observability";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -18,13 +18,13 @@ describe("API observability", () => {
     expect(response.headers.get("server-timing")).toMatch(/^app;dur=/);
     expect(output).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(output.mock.calls[0][0]))).toMatchObject({
+      message: expect.stringMatching(/^GET \/api\/example succeeded \(201\) in /),
       level: "info",
       event: "http.request.completed",
       requestId: "trace-123",
       method: "GET",
       route: "/api/example",
       status: 201,
-      service: "kheyflix",
     });
     expect(String(output.mock.calls[0][0])).not.toContain("secret=hidden");
   });
@@ -84,7 +84,7 @@ describe("API observability", () => {
     });
   });
 
-  it("emits a safe outcome event for every debrid route operation", async () => {
+  it("emits one readable outcome event for a debrid route operation", async () => {
     const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const upstream = new Response("media", { status: 206 });
     const GET = observeApi("/api/debrid/stream/:id/:file", async () => upstream);
@@ -92,11 +92,61 @@ describe("API observability", () => {
     const response = await GET(new Request("https://kheyflix.test/api/debrid/stream/1/0"));
 
     expect(response).toBe(upstream);
-    const events = output.mock.calls.map(([entry]) => JSON.parse(String(entry)).event);
-    expect(events).toEqual([
-      "debrid.stream.completed",
-      "http.request.completed",
-    ]);
+    expect(output).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(output.mock.calls[0][0]))).toMatchObject({
+      event: "http.request.completed",
+      message: expect.stringMatching(/^Stream media succeeded \(206\) in /),
+    });
+  });
+
+  it("does not duplicate a request-specific action log", async () => {
+    const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const GET = observeApi("/api/discovery/search", async (request) => {
+      writeRequestLog("info", "discovery.search.completed", request, { resultCount: 0 });
+      return Response.json({ results: [] });
+    });
+
+    await GET(new Request("https://kheyflix.test/api/discovery/search?q=Pokemon"));
+
+    expect(output).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(output.mock.calls[0][0]))).toMatchObject({
+      message: "Catalog search completed",
+      resultCount: 0,
+    });
+  });
+
+  it("keeps expected client errors concise without a stack", async () => {
+    const output = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const handler = observeApi("/api/debrid/stream/:id/:file", async (request) => {
+      writeRequestLog("warn", "debrid.stream.failed", request, {
+        code: "INVALID_MEDIA",
+        error: new Error("Invalid media selection."),
+      });
+      return Response.json({ error: { code: "INVALID_MEDIA" } }, { status: 400 });
+    });
+
+    await handler(new Request("https://kheyflix.test/api/debrid/stream/bad/0", { method: "HEAD" }));
+
+    const entry = JSON.parse(String(output.mock.calls[0][0]));
+    expect(entry.message).toBe("Check media source failed (400)");
+    expect(entry).toMatchObject({ status: 400, errorCode: "INVALID_MEDIA", route: "/api/debrid/stream/:id/:file" });
+    expect(entry.error).toEqual({ type: "Error", message: "Invalid media selection." });
+  });
+
+  it.each([
+    ["/api/health", "GET", 200, {}],
+    ["/api/debrid/transcode/:id/:file", "PATCH", 204, {}],
+    ["/api/debrid/transcode/:id/:file", "POST", 204, {}],
+    ["/api/debrid/stream/:id/:file", "GET", 206, { range: "bytes=0-1023" }],
+  ])("suppresses noisy routine success logs for %s %s", async (route, method, status, headers) => {
+    const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const handler = observeApi(route, async () => new Response(null, { status }));
+
+    await handler(new Request(`https://kheyflix.test${route.replace(":id", "1").replace(":file", "0")}`, { method, headers }));
+
+    expect(output).not.toHaveBeenCalled();
+    expect(debug).not.toHaveBeenCalled();
   });
 
   it("keeps safe provider guidance and rejects provider-originated sensitive text", () => {

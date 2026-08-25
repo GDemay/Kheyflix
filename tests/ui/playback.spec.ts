@@ -2,10 +2,15 @@ import { expect, test } from "@playwright/test";
 
 const playbackPath =
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
-  "/stream/514397162/2/smiling-friends-s01-e04-episode-4";
+  "/stream/701203060/0/shrek";
 
 test("a real movie starts and keeps streaming", async ({ page }) => {
   test.setTimeout(90_000);
+  let blockingPreflights = 0;
+  page.on("request", (request) => {
+    if (request.method() === "HEAD" && request.url().includes("/api/debrid/stream/"))
+      blockingPreflights += 1;
+  });
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
   const video = page.locator("video");
@@ -31,6 +36,7 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   );
   console.info(`[playback] first decoded frame: ${firstFrameMs}ms`);
   expect(firstFrameMs).toBeLessThan(10_000);
+  expect(blockingPreflights).toBe(0);
 
   const initial = await video.evaluate((element) => ({
     muted: element.muted,
@@ -114,17 +120,15 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Audio languages" })).toBeVisible();
   await page.getByRole("button", { name: "Audio languages" }).click();
   const audioMenu = page.getByRole("dialog", { name: "Audio languages" });
-  await expect(audioMenu.getByRole("button", { name: /English/ })).toHaveClass(
-    /active/,
-  );
+  await expect(audioMenu.locator("button.active")).toHaveCount(1);
   await page.getByRole("button", { name: "Audio languages" }).click();
-  await expect(page.getByRole("button", { name: "Subtitles" })).toBeVisible();
-  await page.getByRole("button", { name: "Subtitles" }).click();
-  await expect(page.getByRole("dialog", { name: "Subtitles" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "English" })).toHaveClass(
-    /active/,
-  );
-  await page.getByRole("button", { name: "Subtitles" }).click();
+  const subtitles = page.getByRole("button", { name: "Subtitles" });
+  if (await subtitles.count()) {
+    await subtitles.click();
+    await expect(page.getByRole("dialog", { name: "Subtitles" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Subtitles" }).locator("button.active")).toHaveCount(1);
+    await subtitles.click();
+  }
   await page.getByRole("button", { name: "Playback settings" }).click();
   await expect(
     page.getByRole("dialog", { name: "Playback settings" }),

@@ -1,5 +1,5 @@
 import { AllDebridError, contentTypeFor, resolveVideo } from '../../../../../lib/alldebrid';
-import { observeApi, publicErrorMessage, requestIdFor, writeLog } from '../../../../../lib/observability';
+import { observeApi, publicErrorMessage, writeRequestLog } from '../../../../../lib/observability';
 
 const clientIp = (request:Request) => {
   const value=request.headers.get('x-real-ip')?.trim();
@@ -40,7 +40,7 @@ async function handle(request:Request,{params}:{params:Promise<{id:string;file:s
     return new Response(upstream.body,{status:upstream.status,headers});
   } catch(error) {
     const known=error instanceof AllDebridError?error:new AllDebridError('Unexpected streaming error.');
-    writeLog('error','debrid.stream.failed',{requestId:requestIdFor(request),code:known.code,status:known.status,error:error instanceof Error?error:new Error(String(error))});
+    writeRequestLog(known.status >= 500 ? 'error' : 'warn','debrid.stream.failed',request,{code:known.code,status:known.status,error:error instanceof Error?error:new Error(String(error))});
     return Response.json({error:{code:known.code,message:publicErrorMessage(known.message,'The media source is temporarily unavailable.')}},{status:known.status});
   }
 }

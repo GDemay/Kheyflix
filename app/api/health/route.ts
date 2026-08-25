@@ -1,5 +1,5 @@
 import { isProwlarrReady } from "../../lib/prowlarr";
-import { observeApi, requestIdFor, writeLog } from "../../lib/observability";
+import { observeApi, writeRequestLog } from "../../lib/observability";
 
 const handleGet = async (request: Request) => {
   const transcoderUrl =
@@ -37,12 +37,13 @@ const handleGet = async (request: Request) => {
     dependencies.transcoder &&
     (!configured.discovery || dependencies.discovery);
 
-  writeLog(ready ? "info" : "warn", "health.check.completed", {
-    requestId: requestIdFor(request),
-    ready,
-    configured,
-    dependencies,
-  });
+  if (!ready)
+    writeRequestLog("warn", "health.check.completed", request, {
+      ready,
+      failedDependencies: Object.entries(dependencies)
+        .filter(([, healthy]) => !healthy)
+        .map(([dependency]) => dependency),
+    });
 
   return Response.json(
     {
