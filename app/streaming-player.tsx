@@ -31,6 +31,7 @@ import {
   QualityMode,
   RenditionQuality,
   requiresMutedAutoplay,
+  usesBootstrapStream,
 } from "./lib/playback";
 import {
   COMPATIBLE_STARTUP_TIMEOUT_MS,
@@ -274,7 +275,6 @@ export default function StreamingPlayer({
     firstFrameRecorded = useRef(false),
     autoUpgradeRequested = useRef(false),
     userPaused = useRef(false),
-    pendingSwitchTime = useRef<number | undefined>(undefined),
     mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
@@ -326,7 +326,6 @@ export default function StreamingPlayer({
       }
     }),
     [session, setSession] = useState(newSessionToken),
-    [upgradeSession] = useState(newSessionToken),
     [bootstrap, setBootstrap] = useState(true),
     [firstFrameMs, setFirstFrameMs] = useState<number>(),
     [audio, setAudio] = useState<number>(),
@@ -356,20 +355,21 @@ export default function StreamingPlayer({
     [mediaInfoAttempt, setMediaInfoAttempt] = useState(0),
     [controls, setControls] = useState(true);
   const transcoded = compatible || rendition !== "original",
-    activeQuality = !transcoded ? "original" : bootstrap ? "bootstrap" : rendition,
-    playbackOffset = bootstrap ? Math.floor(offset / 30) * 30 : offset,
-    activeSession = bootstrap
+    effectiveBootstrap = usesBootstrapStream(iosPlayback, bootstrap),
+    activeQuality = !transcoded ? "original" : effectiveBootstrap ? "bootstrap" : rendition,
+    playbackOffset = effectiveBootstrap ? Math.floor(offset / 30) * 30 : offset,
+    activeSession = effectiveBootstrap
       ? `bootstrap-${id}-${file}-${playbackOffset}`
       : session,
     sourceHeight = info?.video[0]?.height || 0,
     duration = info?.duration || nativeDuration,
     absoluteTime = transcoded ? playbackOffset + localTime : localTime,
     displayTime = scrub ?? absoluteTime;
-  const source = (transcoded && bootstrap) || mediaReady
+  const source = (transcoded && effectiveBootstrap) || mediaReady
     ? iosPlayback && transcoded
-      ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${bootstrap ? "" : `&sync=${preferences.audioSync}`}`
+      ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`
       : transcoded
-      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${!bootstrap && audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
+      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${!effectiveBootstrap && audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
   const playbackTitle = currentQueue?.seriesTitle
@@ -500,7 +500,7 @@ export default function StreamingPlayer({
     absoluteTimeRef.current = absoluteTime;
   }, [absoluteTime, restart]);
   useEffect(() => {
-    if ((!mediaReady && !bootstrap) || !loading || error) return;
+    if ((!mediaReady && !effectiveBootstrap) || !loading || error) return;
     const timer = setTimeout(
       () => {
         const recovery = startupRecovery(transcoded, startupRetries.current);
@@ -531,7 +531,7 @@ export default function StreamingPlayer({
         : NATIVE_STARTUP_TIMEOUT_MS,
     );
     return () => clearTimeout(timer);
-  }, [bootstrap, error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
+  }, [effectiveBootstrap, error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
@@ -634,43 +634,6 @@ export default function StreamingPlayer({
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
-    if (!iosPlayback || !bootstrap || !playing || !mediaReady) return;
-    const token = upgradeSession;
-    const targetQuality = bestAutoQuality(sourceHeight);
-    const standardSource = `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${offset}&quality=${targetQuality}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`;
-    let cancelled = false;
-    console.info("[playback] preparing standard stream", {
-      id,
-      file,
-      rendition: targetQuality,
-    });
-    void fetch(standardSource)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.text();
-      })
-      .then(() => {
-        if (cancelled || !video.current) return;
-        pendingSwitchTime.current = Math.max(
-          0,
-          playbackOffset + video.current.currentTime - offset,
-        );
-        console.info("[playback] switching from bootstrap", {
-          elapsed: pendingSwitchTime.current,
-          rendition: targetQuality,
-        });
-        setSession(token);
-        setRendition(targetQuality);
-        setBootstrap(false);
-      })
-      .catch((reason) =>
-        console.warn("[playback] standard stream prewarm failed", reason),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [audio, bootstrap, file, id, iosPlayback, mediaReady, offset, playbackOffset, playing, preferences.audioSync, sourceHeight, upgradeSession]);
-  useEffect(() => {
     const element = video.current;
     if (!iosPlayback || !source || !element || !Hls.isSupported()) return;
     const hls = new Hls({
@@ -681,12 +644,8 @@ export default function StreamingPlayer({
     hls.loadSource(source);
     hls.attachMedia(element);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      if (bootstrap && offset > playbackOffset)
+      if (effectiveBootstrap && offset > playbackOffset)
         element.currentTime = offset - playbackOffset;
-      if (!bootstrap && pendingSwitchTime.current !== undefined) {
-        element.currentTime = pendingSwitchTime.current;
-        pendingSwitchTime.current = undefined;
-      }
       element.muted = true;
       element.volume = 0;
       void element.play().catch(() => setControls(true));
@@ -699,7 +658,7 @@ export default function StreamingPlayer({
       });
     });
     return () => hls.destroy();
-  }, [bootstrap, iosPlayback, offset, playbackOffset, source]);
+  }, [effectiveBootstrap, iosPlayback, offset, playbackOffset, source]);
   useEffect(() => {
     if (!requiresMutedAutoplay(navigator.userAgent)) return;
     if (video.current) {
@@ -790,7 +749,7 @@ export default function StreamingPlayer({
   return (
     <main
       className={`player-shell ${controls || !playing ? "controls-visible" : ""} subtitle-${subtitleSize}`}
-      data-playback-phase={bootstrap ? "bootstrap" : "standard"}
+      data-playback-phase={effectiveBootstrap ? "bootstrap" : "standard"}
       data-playback-quality={activeQuality}
       data-first-frame-ms={firstFrameMs === undefined ? undefined : Math.round(firstFrameMs)}
       ref={shell}
@@ -888,7 +847,7 @@ export default function StreamingPlayer({
               setFirstFrameMs(elapsed);
               console.info("[playback] first frame", {
                 milliseconds: Math.round(elapsed),
-                phase: bootstrap ? "bootstrap" : "standard",
+                phase: effectiveBootstrap ? "bootstrap" : "standard",
                 quality: activeQuality,
               });
             };

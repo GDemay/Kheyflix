@@ -6,6 +6,7 @@ import {
   needsCompatiblePlayback,
   nextAutoQuality,
   requiresMutedAutoplay,
+  usesBootstrapStream,
 } from "./playback";
 
 describe("playback compatibility", () => {
@@ -17,6 +18,12 @@ describe("playback compatibility", () => {
   it("uses compatibility playback for the selected unsupported audio codec", () => {
     expect(needsCompatibleAudio("dts")).toBe(true);
     expect(needsCompatibleAudio("eac3")).toBe(true);
+  });
+
+  it("never replaces an active iPhone Safari stream with a bootstrap source", () => {
+    expect(usesBootstrapStream(true, true)).toBe(false);
+    expect(usesBootstrapStream(false, true)).toBe(true);
+    expect(usesBootstrapStream(false, false)).toBe(false);
   });
 
   it("does not force compatibility before metadata is available", () => {
