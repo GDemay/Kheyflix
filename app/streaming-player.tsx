@@ -46,6 +46,7 @@ import {
 } from "./lib/playback-preferences";
 import { Route } from "./routing";
 import { PlaybackRequestGate } from "./lib/player-navigation";
+import { showCentralTransportOverlay } from "./lib/player-controls";
 
 type MediaInfo = {
   duration: number;
@@ -307,6 +308,10 @@ export default function StreamingPlayer({
           .createElement("video")
           .canPlayType("application/vnd.apple.mpegurl"),
       ),
+    ),
+    [finePointer] = useState(() =>
+      typeof window !== "undefined" &&
+      !window.matchMedia("(pointer: coarse)").matches,
     ),
     [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
@@ -953,7 +958,12 @@ export default function StreamingPlayer({
           Tap to play
         </button>
       )}
-      {(pausedByUser || (controls && playing)) && !error && (
+      {showCentralTransportOverlay({
+        pausedByUser,
+        controlsVisible: controls,
+        playing,
+        finePointer,
+      }) && !error && (
         <div
           className="pause-overlay"
           role="group"

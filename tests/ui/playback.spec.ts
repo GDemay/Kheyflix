@@ -167,36 +167,76 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });
 
-test("pointer movement reveals central playback quick controls", async ({ page }, testInfo) => {
+test("pointer movement reveals unobtrusive playback chrome", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "laptop", "mouse-specific desktop behavior");
   test.setTimeout(60_000);
+  await page.addInitScript(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+      configurable: true,
+      get() {
+        return (this as HTMLMediaElement).dataset.mockPaused === "true";
+      },
+    });
+    HTMLMediaElement.prototype.play = function () {
+      this.dataset.mockPaused = "false";
+      this.dispatchEvent(new Event("play", { bubbles: true }));
+      this.dispatchEvent(new Event("playing", { bubbles: true }));
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = function () {
+      this.dataset.mockPaused = "true";
+      this.dataset.syntheticPause = "true";
+      this.dispatchEvent(new Event("pause", { bubbles: true }));
+      delete this.dataset.syntheticPause;
+    };
+    window.addEventListener(
+      "pause",
+      (event) => {
+        if ((event.target as HTMLMediaElement).dataset?.syntheticPause !== "true")
+          event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await page.clock.install();
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
   const shell = page.locator("main.player-shell");
   const video = page.locator("video");
-  await expect(video).toBeVisible();
-  await expect
-    .poll(() => shell.getAttribute("data-first-frame-ms"), { timeout: 30_000 })
-    .not.toBeNull();
-  if (await video.evaluate((element) => element.paused))
-    await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(video).toBeVisible({ timeout: 30_000 });
+  await video.evaluate((element) => element.play());
   await expect.poll(() => video.evaluate((element) => element.paused)).toBe(false);
 
-  await page.mouse.move(1200, 180);
-  await expect(shell).not.toHaveClass(/controls-visible/, { timeout: 5_000 });
+  await page.clock.fastForward(3_000);
+  await expect(shell).not.toHaveClass(/controls-visible/);
   await page.mouse.move(640, 360);
-  const quickControls = page.getByRole("group", {
-    name: "Playback quick controls",
+  await expect(shell).toHaveClass(/controls-visible/);
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("group", { name: "Playback quick controls" })).toHaveCount(0);
+  const pauseButton = page.locator('.player-controls button[aria-label="Pause"]');
+  await expect(pauseButton).toBeVisible();
+  await pauseButton.click();
+  const pausedControls = page.getByRole("group", { name: "Playback paused" });
+  await expect(pausedControls).toBeVisible();
+  await expect(pausedControls.getByRole("button", { name: "Play" })).toBeVisible();
+  await expect(pausedControls.getByRole("button", { name: "Back 10 seconds" })).toBeVisible();
+  await expect(pausedControls.getByRole("button", { name: "Forward 10 seconds" })).toBeVisible();
+  await pausedControls.getByRole("button", { name: "Play" }).click();
+  await page.mouse.move(700, 400);
+  await expect(shell).toHaveClass(/controls-visible/);
+  await expect(page.getByRole("group", { name: "Playback quick controls" })).toHaveCount(0);
+  await page.clock.fastForward(3_000);
+  await expect(shell).not.toHaveClass(/controls-visible/);
+});
+
+test("touch playback keeps central quick controls", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "phone", "touch-specific behavior");
+  await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
+  const video = page.locator("video");
+  await expect(video).toBeVisible({ timeout: 30_000 });
+  await video.evaluate((element) => {
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    element.dispatchEvent(new Event("playing", { bubbles: true }));
   });
-  await expect(quickControls).toBeVisible();
-  await expect(
-    quickControls.getByRole("button", { name: "Back 10 seconds" }),
-  ).toBeVisible();
-  await expect(
-    quickControls.getByRole("button", { name: "Pause", exact: true }),
-  ).toBeVisible();
-  await expect(
-    quickControls.getByRole("button", { name: "Forward 10 seconds" }),
-  ).toBeVisible();
-  await expect(quickControls).toBeHidden({ timeout: 5_000 });
+  await expect(page.getByRole("group", { name: "Playback quick controls" })).toBeVisible();
 });
