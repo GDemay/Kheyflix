@@ -5,6 +5,7 @@ import {
   needsCompatibleAudio,
   needsCompatiblePlayback,
   nextAutoQuality,
+  playbackSurfaceState,
   requiresMutedAutoplay,
   usesBootstrapStream,
 } from "./playback";
@@ -72,5 +73,171 @@ describe("playback compatibility", () => {
     expect(bestAutoQuality(2160)).toBe("original");
     expect(bestAutoQuality(720)).toBe("original");
     expect(bestAutoQuality(0)).toBe("480");
+  });
+
+  it.each([
+    {
+      name: "initial loading",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: false,
+        loading: true,
+        pausedByUser: false,
+        playing: true,
+        startedPlayback: false,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: true,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "rebuffering after playback started",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: false,
+        loading: true,
+        pausedByUser: true,
+        playing: true,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: true,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "playback error",
+      input: {
+        controls: true,
+        error: true,
+        iosPlayback: false,
+        loading: false,
+        pausedByUser: true,
+        playing: false,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: true,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "iOS autoplay prompt",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: true,
+        loading: false,
+        pausedByUser: true,
+        playing: false,
+        startedPlayback: false,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: true,
+      },
+    },
+    {
+      name: "iOS user pause after playback started",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: true,
+        loading: false,
+        pausedByUser: true,
+        playing: false,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: true,
+        showBuffering: false,
+        showCentralControls: true,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "user pause",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: false,
+        loading: false,
+        pausedByUser: true,
+        playing: false,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: true,
+        showBuffering: false,
+        showCentralControls: true,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "playing with quick controls visible",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: false,
+        loading: false,
+        pausedByUser: false,
+        playing: true,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: true,
+        showBuffering: false,
+        showCentralControls: true,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+    {
+      name: "fine-pointer playback with chrome visible",
+      input: {
+        controls: true,
+        error: false,
+        finePointer: true,
+        iosPlayback: false,
+        loading: false,
+        pausedByUser: false,
+        playing: true,
+        startedPlayback: true,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
+      },
+    },
+  ])("keeps $name surfaces mutually exclusive", ({ input, expected }) => {
+    expect(playbackSurfaceState(input)).toEqual(expected);
   });
 });
