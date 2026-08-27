@@ -111,19 +111,22 @@ const reportClientEvent = (event: string, context: Record<string, unknown>) => {
 
 export default function DiscoveryPage({
   navigate,
+  route,
 }: {
   navigate: (route: Route) => void;
+  route: Route;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(route.query || "");
   const [results, setResults] = useState<Result[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchCompleted, setSearchCompleted] = useState(false);
   const [error, setError] = useState("");
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [preparations, setPreparations] = useState<Record<string, Preparation>>({});
-  const [searchKind, setSearchKind] = useState<"movie" | "series">("movie");
-  const [requestedSeason, setRequestedSeason] = useState("");
-  const [requestedEpisode, setRequestedEpisode] = useState("");
+  const [searchKind, setSearchKind] = useState<"movie" | "series">(route.kind || "movie");
+  const [requestedSeason, setRequestedSeason] = useState(route.season ? String(route.season) : "");
+  const [requestedEpisode, setRequestedEpisode] = useState(route.episode ? String(route.episode) : "");
+  const [contextSearchPending, setContextSearchPending] = useState(Boolean(route.query && route.kind));
   const [seasonFilter, setSeasonFilter] = useState("all");
   const [episodeFilter, setEpisodeFilter] = useState("all");
   const [qualityFilter, setQualityFilter] = useState("all");
@@ -169,7 +172,7 @@ export default function DiscoveryPage({
     [preparations],
   );
 
-  const runSearch = async (term: string) => {
+  const runSearch = useCallback(async (term: string) => {
     if (term.length < 2) return;
     const requestId = clientRequestId();
     setSearching(true);
@@ -215,12 +218,18 @@ export default function DiscoveryPage({
     } finally {
       setSearching(false);
     }
-  };
+  }, [requestedEpisode, requestedSeason, searchKind]);
 
   const search = (event: FormEvent) => {
     event.preventDefault();
     void runSearch(query.trim());
   };
+
+  useEffect(() => {
+    if (!contextSearchPending) return;
+    setContextSearchPending(false);
+    void runSearch(query.trim());
+  }, [contextSearchPending, query, runSearch]);
 
   const prepare = async (result: Result) => {
     if (!rightsConfirmed) return;
@@ -489,9 +498,16 @@ export default function DiscoveryPage({
                   {preparation?.phase === "failed" ? "Try again" : "Prepare"}
                 </button>
               ) : ready ? (
-                <button className="watch-action" onClick={() => watch(preparation)}>
-                  <Play fill="currentColor" /> Watch
-                </button>
+                <div className="ready-actions">
+                  <button className="watch-action" onClick={() => watch(preparation)}>
+                    <Play fill="currentColor" /> Watch
+                  </button>
+                  {route.returnId && (
+                    <button className="return-action" onClick={() => navigate({ section: "debrid", id: route.returnId, title: route.returnTitle || route.query || "Kheyflix series" })}>
+                      Back to {route.returnTitle || route.query || "series"}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <span className="preparing-label"><LoaderCircle className="spin" /> Preparing</span>
               )}

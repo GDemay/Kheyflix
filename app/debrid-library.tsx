@@ -9,6 +9,7 @@ import {
   Info,
   Play,
   RefreshCw,
+  Search,
   X,
 } from "lucide-react";
 import {
@@ -23,6 +24,7 @@ import { Route } from "./routing";
 import { useDialogFocus } from "./lib/use-dialog-focus";
 import { playKheyflixSting } from "./lib/brand-sting";
 import { FAVORITES_KEY, friendsFirst, parseFavorites, toggleFavorite } from "./lib/favorites";
+import { findNextMissingEpisode } from "./lib/episode-acquisition";
 import {
   createCatalogSectionQueries,
   episodeCountLabel,
@@ -757,7 +759,8 @@ export function DebridDetails({
       (episode) =>
         item.category === "movie" || episode.season === (season ?? seasons[0]),
     ),
-    first = episodes[0] || item.episodes[0];
+    first = episodes[0] || item.episodes[0],
+    missingEpisode = findNextMissingEpisode(item.episodes, metadata?.episodeNames);
   return (
     <div
       className="modal-backdrop"
@@ -852,6 +855,22 @@ export function DebridDetails({
                   <ChevronDown />
                 </label>
               </div>
+              {missingEpisode && (
+                <div className="missing-episode-callout" role="status">
+                  <span>
+                    <small>UP NEXT</small>
+                    <strong>{missingEpisode.title}</strong>
+                    <em>S{String(missingEpisode.season).padStart(2, "0")}E{String(missingEpisode.episode).padStart(2, "0")} is not in your library yet.</em>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => navigate({ section: "discover", query: displayTitle(item, metadata), kind: "series", season: missingEpisode.season, episode: missingEpisode.episode, returnId: item.id, returnTitle: displayTitle(item, metadata) })}
+                    aria-label={`Find S${String(missingEpisode.season).padStart(2, "0")}E${String(missingEpisode.episode).padStart(2, "0")}`}
+                  >
+                    <Search /> Find episode
+                  </button>
+                </div>
+              )}
               {episodes.map((episode) => {
                 const key = `${episode.season}:${episode.episode}`,
                   title =

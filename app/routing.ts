@@ -1,6 +1,11 @@
 import { normalizeSearchQuery } from './catalog-ux';
 
-export type Route = { section: 'home'|'movies'|'series'|'search'|'discover'|'title'|'watch'|'profile'|'debrid'|'stream'; id?: string; file?:number; title?:string; query?: string; compat?:boolean };
+export type Route = { section: 'home'|'movies'|'series'|'search'|'discover'|'title'|'watch'|'profile'|'debrid'|'stream'; id?: string; file?:number; title?:string; query?: string; compat?:boolean; kind?:'movie'|'series'; season?:number; episode?:number; returnId?:string; returnTitle?:string };
+
+const positiveInteger = (value:string|null) => {
+  const number=Number(value);
+  return Number.isSafeInteger(number)&&number>0?number:undefined;
+};
 
 export const parseRoute = (location = '/'): Route => {
   const url = new URL(location, 'https://kheyflix.local');
@@ -10,7 +15,10 @@ export const parseRoute = (location = '/'): Route => {
   if (parts[0] === 'debrid') return { section:'debrid', id:decodeURIComponent(parts[1]||''), file:parts[2]===undefined?undefined:Number(parts[2]), title:url.searchParams.get('title') || 'Kheyflix title' };
   if (parts[0] === 'title') return { section:'title', id:parts[1] };
   if (parts[0] === 'profile') return { section:'profile' };
-  if (parts[0] === 'discover') return { section:'discover' };
+  if (parts[0] === 'discover') {
+    const query=normalizeSearchQuery(url.searchParams.get('q')||''),kind=url.searchParams.get('kind')==='series'?'series':url.searchParams.get('kind')==='movie'?'movie':undefined,season=positiveInteger(url.searchParams.get('season')),episode=positiveInteger(url.searchParams.get('episode')),returnId=url.searchParams.get('returnId')||undefined,returnTitle=normalizeSearchQuery(url.searchParams.get('returnTitle')||'');
+    return {section:'discover',...(query?{query}:{}),...(kind?{kind}:{}),...(season?{season}:{}),...(episode?{episode}:{}),...(returnId?{returnId}:{}),...(returnTitle?{returnTitle}:{})};
+  }
   if (parts[0] === 'search') return { section:'search', query:normalizeSearchQuery(url.searchParams.get('q') ?? '') };
   if (parts[0] === 'movies' || parts[0] === 'series') return { section:parts[0] };
   return { section:'home' };
@@ -19,6 +27,7 @@ export const parseRoute = (location = '/'): Route => {
 export const routePath = (route:Route) => {
   if (route.section === 'home') return '/';
   if (route.section === 'search') { const query=normalizeSearchQuery(route.query || '');return `/search${query ? `?q=${encodeURIComponent(query)}` : ''}`; }
+  if (route.section === 'discover') { const parameters=new URLSearchParams(),query=normalizeSearchQuery(route.query||'');if(query)parameters.set('q',query);if(route.kind)parameters.set('kind',route.kind);if(route.season)parameters.set('season',String(route.season));if(route.episode)parameters.set('episode',String(route.episode));if(route.returnId)parameters.set('returnId',route.returnId);if(route.returnTitle)parameters.set('returnTitle',normalizeSearchQuery(route.returnTitle));const search=parameters.toString();return `/discover${search?`?${search}`:''}`; }
   if (route.section === 'stream') { const slug=(route.title||'kheyflix-video').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,100);return `/stream/${route.id}/${route.file}/${slug}${route.compat?'?compat=1':''}`; }
   if (route.section === 'debrid') return `/debrid/${encodeURIComponent(route.id||'')}${route.file===undefined?'':`/${route.file}`}?title=${encodeURIComponent(route.title || 'Kheyflix title')}`;
   if (route.section === 'title' || route.section === 'watch') return `/${route.section}/${route.id}`;
