@@ -3,6 +3,67 @@ import { expect, test } from "@playwright/test";
 test.describe("cinematic app startup", () => {
   test.use({ reducedMotion: "no-preference" });
 
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      const audioProbe = { contexts: 0, starts: 0 };
+      Object.defineProperty(window, "__kheyflixAudioProbe", {
+        value: audioProbe,
+      });
+      const connect = function (this: unknown) {
+        return this;
+      };
+      class StartupAudioContext {
+        currentTime = 0;
+        destination = {};
+        state = "running";
+        constructor() {
+          audioProbe.contexts += 1;
+        }
+        resume() {
+          return Promise.resolve();
+        }
+        close() {
+          return Promise.resolve();
+        }
+        createDynamicsCompressor() {
+          return {
+            threshold: { value: 0 },
+            knee: { value: 0 },
+            ratio: { value: 0 },
+            connect,
+          };
+        }
+        createGain() {
+          return {
+            gain: {
+              setValueAtTime() {},
+              exponentialRampToValueAtTime() {},
+            },
+            connect,
+          };
+        }
+        createOscillator() {
+          return {
+            type: "sine",
+            frequency: {
+              setValueAtTime() {},
+              exponentialRampToValueAtTime() {},
+            },
+            connect,
+            start() {
+              audioProbe.starts += 1;
+            },
+            stop() {},
+          };
+        }
+      }
+      Object.defineProperty(window, "AudioContext", {
+        configurable: true,
+        value: StartupAudioContext,
+      });
+    });
+  });
+
   test("rushes the Kheyflix mark toward the viewer and clears within two seconds", async ({
     page,
   }) => {
@@ -12,6 +73,8 @@ test.describe("cinematic app startup", () => {
     await expect(intro).toBeVisible();
     await expect(intro.locator(".app-startup-intro__mark")).toBeVisible();
     await expect(intro.locator(".app-startup-intro__tunnel")).toBeVisible();
+    await expect(intro.locator(".startup-k-silhouette")).toHaveCount(1);
+    await expect(intro.locator(".startup-k-panel")).toHaveCount(0);
 
     const presentation = await intro.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -30,6 +93,23 @@ test.describe("cinematic app startup", () => {
     expect(presentation.position).toBe("fixed");
     await expect(intro).toBeHidden({ timeout: 2_100 });
     await expect(page.locator(".app-header")).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("schedules the original startup sting once", async ({ page }) => {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as typeof window & {
+                __kheyflixAudioProbe?: { contexts: number; starts: number };
+              }
+            ).__kheyflixAudioProbe,
+        ),
+      )
+      .toEqual({ contexts: 1, starts: 6 });
   });
 });
 

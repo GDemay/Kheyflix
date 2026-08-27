@@ -34,8 +34,10 @@ import {
   playbackReturnRoute,
 } from "./lib/player-navigation";
 import { useDialogFocus } from "./lib/use-dialog-focus";
+import { playKheyflixSting } from "./lib/brand-sting";
 
 const subscribeToNothing = () => () => undefined;
+let startupStingRequested = false;
 
 function IconButton({
   label,
@@ -62,6 +64,11 @@ function IconButton({
 }
 
 function StartupIntro() {
+  useEffect(() => {
+    if (startupStingRequested) return;
+    startupStingRequested = true;
+    playKheyflixSting();
+  }, []);
   return (
     <div className="app-startup-intro" aria-hidden="true">
       <div className="app-startup-intro__tunnel" />
@@ -83,10 +90,24 @@ function StartupIntro() {
               <stop offset="0.52" stopColor="#ff1d2a" />
               <stop offset="1" stopColor="#8d0710" />
             </linearGradient>
+            <clipPath id="startup-k-clip">
+              <path d="M28 12h48v88l50-88h57l-76 120 79 136h-58L76 170v98H28z" />
+            </clipPath>
           </defs>
-          <path className="startup-k-panel startup-k-panel--stem" d="M25 12h52v256H25z" />
-          <path className="startup-k-panel startup-k-panel--upper" d="M77 116 141 12h-58L46 87v90z" />
-          <path className="startup-k-panel startup-k-panel--lower" d="m74 119 82 149H96L46 177z" />
+          <path
+            className="startup-k-silhouette"
+            d="M28 12h48v88l50-88h57l-76 120 79 136h-58L76 170v98H28z"
+          />
+          <g clipPath="url(#startup-k-clip)" aria-hidden="true">
+            <path
+              className="startup-k-facet startup-k-facet--upper"
+              d="M76 100 126 12h35L91 136z"
+            />
+            <path
+              className="startup-k-facet startup-k-facet--lower"
+              d="m91 128 73 140h-36L76 170z"
+            />
+          </g>
         </svg>
         <strong>KHEYFLIX</strong>
       </div>
