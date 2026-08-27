@@ -13,7 +13,7 @@ import {
   Sparkles,
   Tv,
 } from "lucide-react";
-import { DebridMagnetRecord, directPlayMovieFiles, groupDebridCatalog } from "./lib/media-parser";
+import { DebridMagnetRecord, groupDebridCatalog, streamableMovieFiles } from "./lib/media-parser";
 import type { ReleaseMetadata } from "./lib/release-parser";
 import { fetchWithTimeout, RequestTimeoutError } from "./lib/fetch-with-timeout";
 import { Route } from "./routing";
@@ -318,7 +318,7 @@ export default function DiscoveryPage({
           if (!record) continue;
           const result = results.find((item) => item.id === resultId);
           const playableFiles = result?.category === "movie"
-            ? directPlayMovieFiles(record.videoFiles, record.filename)
+            ? streamableMovieFiles(record.videoFiles, record.filename)
             : record.videoFiles;
           const incompatibleMovie = record.statusCode === 4 && result?.category === "movie" && playableFiles.length === 0;
           const ready = record.statusCode === 4 && playableFiles.length > 0;
@@ -332,7 +332,7 @@ export default function DiscoveryPage({
             magnetId: preparation.magnetId,
             phase: ready ? "ready" : failed || incompatibleMovie ? "failed" : "preparing",
             progress,
-            status: ready ? "Ready to watch" : incompatibleMovie ? "This release needs conversion and is not available for direct playback." : failed ? record.status || "Preparation failed" : record.status || "Preparing…",
+            status: ready ? "Ready to watch" : incompatibleMovie ? "This release format is not supported for playback." : failed ? record.status || "Preparation failed" : record.status || "Preparing…",
             record: ready ? { ...record, videoFiles: playableFiles } : record,
           };
         }

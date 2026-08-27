@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
-test("a prepared conversion-required movie never offers Watch", async ({ page }) => {
+test("a prepared MKV movie offers compatibility streaming", async ({ page }) => {
   await page.route("**/api/discovery/search?*", (route) =>
     route.fulfill({
       json: {
@@ -52,8 +52,11 @@ test("a prepared conversion-required movie never offers Watch", async ({ page })
   await page.getByText("I confirm I’m authorized").click();
   await page.getByRole("button", { name: "Prepare", exact: true }).click();
 
-  await expect(page.getByText("This release needs conversion and is not available for direct playback.")).toBeVisible({ timeout: 8_000 });
-  await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(0);
+  const watch = page.getByRole("button", { name: "Watch", exact: true });
+  await expect(page.getByText("Ready to watch")).toBeVisible({ timeout: 8_000 });
+  await expect(watch).toBeVisible();
+  await watch.click();
+  await expect(page).toHaveURL(/\/stream\/42\/0\/candidate-movie\?compat=1$/);
 });
 
 test("language status is explicit and language filters are actionable", async ({ page }) => {

@@ -10,6 +10,11 @@ import {
   videoOutputOptions,
 } from "./transcoder-options.mjs";
 import { createWebVttRebaseTransform } from "./subtitle-timeline.mjs";
+import {
+  hlsRetentionOptions,
+  reclaimablePlaybackJob,
+  remoteMediaInput,
+} from "./progressive-streaming.mjs";
 
 const port = Number(process.env.KHEYFLIX_TRANSCODER_PORT || 3101),
   appOrigin = process.env.KHEYFLIX_APP_ORIGIN || "http://localhost:3000";
@@ -17,6 +22,7 @@ const ffmpeg = process.env.KHEYFLIX_FFMPEG_PATH || "ffmpeg",
   ffprobe = process.env.KHEYFLIX_FFPROBE_PATH || "ffprobe";
 const jobs = new Map(),
   hlsJobs = new Map(),
+  bootstrapJobs = new Set(),
   jobTouched = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
@@ -40,20 +46,30 @@ const activeHlsJobs = () =>
 const activeJobs = () => jobs.size + activeHlsJobs() + subtitleJobs.size;
 const reclaimPlaybackCapacity = () => {
   while (activeJobs() >= MAX_JOBS) {
-    const staleBefore = Date.now() - ABANDONED_JOB_TTL_MS;
+    const now = Date.now();
     const candidateToken = [
       ...Array.from(hlsJobs.entries())
-      .filter(
-        ([token, job]) =>
-          job.child.exitCode === null &&
-          (job.cacheable || (jobTouched.get(token) || 0) < staleBefore),
+        .filter(
+          ([token, job]) =>
+            job.child.exitCode === null &&
+            reclaimablePlaybackJob(
+              job.cacheable,
+              jobTouched.get(token) || 0,
+              now,
+              ABANDONED_JOB_TTL_MS,
+            ),
       )
       .map(([token]) => token),
       ...Array.from(jobs.entries())
         .filter(
           ([token, child]) =>
             child.exitCode === null &&
-            (jobTouched.get(token) || 0) < staleBefore,
+            reclaimablePlaybackJob(
+              bootstrapJobs.has(token),
+              jobTouched.get(token) || 0,
+              now,
+              ABANDONED_JOB_TTL_MS,
+            ),
         )
         .map(([token]) => token),
     ].sort(
@@ -65,11 +81,12 @@ const reclaimPlaybackCapacity = () => {
   }
   return true;
 };
-const inputFor = (id, file) => `${appOrigin}/api/debrid/stream/${id}/${file}`;
+const inputFor = (id, file) => remoteMediaInput(appOrigin, id, file);
 const stopJob = (token, force = false) => {
   const child = jobs.get(token);
   if (child && !child.killed) child.kill("SIGKILL");
   jobs.delete(token);
+  bootstrapJobs.delete(token);
   const hls = hlsJobs.get(token);
   if (hls) {
     if (hls.cacheable && !force) return;
@@ -305,12 +322,7 @@ const server = http.createServer(async (request, response) => {
           "hls",
           "-hls_time",
           quality === "bootstrap" ? "1" : "2",
-          "-hls_list_size",
-          "0",
-          "-hls_playlist_type",
-          "event",
-          "-hls_flags",
-          "independent_segments+temp_file",
+          ...hlsRetentionOptions(quality === "bootstrap"),
           "-hls_segment_filename",
           join(directory, "segment%05d.ts"),
           join(directory, "master.m3u8"),
@@ -459,6 +471,7 @@ const server = http.createServer(async (request, response) => {
     );
     const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
     jobs.set(token, child);
+    if (quality === "bootstrap") bootstrapJobs.add(token);
     jobTouched.set(token, Date.now());
     const terminate = () => {
       if (!child.killed) child.kill("SIGKILL");
@@ -494,6 +507,7 @@ const server = http.createServer(async (request, response) => {
     child.on("close", (code) => {
       clearTimeout(startup);
       jobs.delete(token);
+      bootstrapJobs.delete(token);
       jobTouched.delete(token);
       if (!started && !response.writableEnded)
         json(response, code === null ? 504 : 502, {

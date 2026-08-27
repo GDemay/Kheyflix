@@ -402,7 +402,7 @@ describe("Prowlarr discovery", () => {
     expect(results[0].category).toBe("movie");
   });
 
-  it("omits movie releases that explicitly require compatibility conversion", async () => {
+  it("keeps MKV releases while omitting incompatible non-MKV movie releases", async () => {
     process.env.PROWLARR_URL = "https://prowlarr.test";
     process.env.PROWLARR_API_KEY = "key";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([
@@ -414,6 +414,48 @@ describe("Prowlarr discovery", () => {
     const results = await searchProwlarr("Movie", { kind: "movie" });
     expect(results.map((result) => result.title)).toEqual([
       "Direct.Movie.2026.1080p.WEB-DL.x264",
+      "Matroska.Movie.2026.1080p.mkv",
     ]);
+  });
+
+  it("keeps MKV movie releases for progressive compatibility streaming", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json([
+      { title: "Progressive.Movie.2026.1080p.HEVC.x265.mkv", magnetUrl: "magnet:?xt=urn:btih:MKV0001" },
+      { title: "Unsupported.Movie.2026.1080p.HEVC.x265.mp4", magnetUrl: "magnet:?xt=urn:btih:MP40001" },
+    ])));
+
+    const results = await searchProwlarr("Movie", { kind: "movie" });
+    expect(results.map((result) => result.title)).toEqual([
+      "Progressive.Movie.2026.1080p.HEVC.x265.mkv",
+    ]);
+  });
+
+  it("keeps an MKV movie found by validated fallback discovery", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json([]))
+      .mockResolvedValueOnce(Response.json([{
+        title: "Progressive.Movie.2026.1080p.WEB-DL.HEVC.x265.mkv [Group]",
+        magnetUrl: "magnet:?xt=urn:btih:MKVFALLBACK",
+        categories: [{ id: 8000, name: "Other" }],
+      }]))
+      .mockResolvedValueOnce(new Response(`
+        <div class="comp:media-card">
+          <a data-media-type="movie" href="/movie/2026-progressive-movie">
+            <img alt="Progressive Movie" src="poster.jpg" />
+          </a>
+          <span class="release_date">August 27, 2026</span>
+        </div>
+      `));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await searchProwlarr("Progressive Movie", { kind: "movie" });
+    expect(results.map((result) => result.title)).toEqual([
+      "Progressive.Movie.2026.1080p.WEB-DL.HEVC.x265.mkv [Group]",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   availableQualities,
   bestAutoQuality,
@@ -6,6 +6,7 @@ import {
   needsCompatiblePlayback,
   nextAutoQuality,
   playbackSurfaceState,
+  releaseTranscoderSession,
   requiresMutedAutoplay,
   usesBootstrapStream,
 } from "./playback";
@@ -73,6 +74,17 @@ describe("playback compatibility", () => {
     expect(bestAutoQuality(2160)).toBe("original");
     expect(bestAutoQuality(720)).toBe("original");
     expect(bestAutoQuality(0)).toBe("480");
+  });
+
+  it("releases a quality prewarm session before the upgraded stream starts", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+
+    await releaseTranscoderSession(fetcher, "72935164", 0, "prewarm-123");
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/debrid/transcode/72935164/0?session=prewarm-123",
+      { method: "POST", keepalive: true },
+    );
   });
 
   it.each([
