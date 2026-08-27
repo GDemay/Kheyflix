@@ -16,21 +16,27 @@ describe("playback preferences", () => {
   it("defaults to English audio, normal speed, and neutral audio sync", () => {
     expect(defaultPlaybackPreferences()).toEqual({
       audioLanguage: "eng",
+      subtitleSize: "medium",
+      qualityMode: "auto",
       playbackRate: 1,
       audioSync: 0,
     });
   });
 
-  it("preserves global audio alongside subtitle, speed, and sync choices", () => {
+  it("preserves every player configuration choice used by the next episode", () => {
     const saved = serializePlaybackPreferences({
       audioLanguage: "fra",
       subtitleLanguage: "eng",
+      subtitleSize: "large",
+      qualityMode: "720",
       playbackRate: 1.25,
       audioSync: -0.4,
     });
     expect(parsePlaybackPreferences(saved)).toEqual({
       audioLanguage: "fra",
       subtitleLanguage: "eng",
+      subtitleSize: "large",
+      qualityMode: "720",
       playbackRate: 1.25,
       audioSync: -0.4,
     });
@@ -39,9 +45,20 @@ describe("playback preferences", () => {
   it("rejects unsafe speeds and clamps sync corrections", () => {
     expect(
       parsePlaybackPreferences(
-        JSON.stringify({ playbackRate: 9, audioSync: 100 }),
+        JSON.stringify({
+          subtitleSize: "giant",
+          qualityMode: "cinema",
+          playbackRate: 9,
+          audioSync: 100,
+        }),
       ),
-    ).toEqual({ audioLanguage: "eng", playbackRate: 1, audioSync: 5 });
+    ).toEqual({
+      audioLanguage: "eng",
+      subtitleSize: "medium",
+      qualityMode: "auto",
+      playbackRate: 1,
+      audioSync: 5,
+    });
   });
 
   it("selects English ahead of a non-English source default", () => {
