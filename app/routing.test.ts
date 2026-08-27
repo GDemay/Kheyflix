@@ -31,4 +31,19 @@ describe('Kheyflix routing', () => {
     expect(parseRoute('/search?q=%20%20%20')).toEqual({section:'search',query:''});
     expect(parseRoute('/search?q=Star%09%20%20Wars')).toEqual({section:'search',query:'Star Wars'});
   });
+
+  it('round-trips contextual discovery for a missing series episode', () => {
+    const route = {
+      section: 'discover',
+      query: 'Friends',
+      kind: 'series',
+      season: 1,
+      episode: 2,
+      returnId: 'series-friends-1994',
+      returnTitle: 'Friends',
+    } as const;
+    const path = '/discover?q=Friends&kind=series&season=1&episode=2&returnId=series-friends-1994&returnTitle=Friends';
+    expect(routePath(route)).toBe(path);
+    expect(parseRoute(path)).toEqual(route);
+  });
 });

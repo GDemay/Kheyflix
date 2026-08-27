@@ -762,7 +762,7 @@ export default function KheyflixApp() {
           navigate={navigate}
         />
       )}
-      {route.section === "discover" && <DiscoveryPage navigate={navigate} />}
+      {route.section === "discover" && <DiscoveryPage navigate={navigate} route={route} />}
       {route.section === "profile" && <ProfilePage navigate={navigate} />}
       {route.section === "debrid" && (
         <div className="background-page catalog-backdrop" />
