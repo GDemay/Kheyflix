@@ -8,20 +8,22 @@ const partialFriends = {
   status: "Ready",
   videoFiles: [
     { index: 0, name: "Friends.S01E01.mkv", size: 1_000_000_000, path: "" },
+    { index: 1, name: "Friends.S02E01.mkv", size: 1_000_000_000, path: "" },
   ],
 };
 
 const nextFriends = {
   id: 11,
-  filename: "Friends (1994) S01E02",
+  filename: "Friends (1994) S03 COMPLETE",
   statusCode: 4,
   status: "Ready",
   videoFiles: [
-    { index: 0, name: "Friends.S01E02.mkv", size: 1_000_000_000, path: "" },
+    { index: 0, name: "Friends.S03E01.mkv", size: 1_000_000_000, path: "" },
+    { index: 1, name: "Friends.S03E02.mkv", size: 1_000_000_000, path: "" },
   ],
 };
 
-test("finds, prepares, and exposes the next missing episode from series details", async ({ page }) => {
+test("finds, prepares, and exposes the next missing season from series details", async ({ page }) => {
   let prepared = false;
   let searchUrl = "";
   await page.route("**/api/metadata?*", (route) => route.fulfill({
@@ -32,7 +34,7 @@ test("finds, prepares, and exposes the next missing episode from series details"
         canonicalTitle: "Friends",
         year: 1994,
         genres: ["Comedy"],
-        episodeNames: { "1:1": "Pilot", "1:2": "The One with the Sonogram" },
+        episodeNames: { "1:1": "Pilot", "2:1": "The One with Ross's New Girlfriend", "3:1": "The One with the Princess Leia Fantasy", "3:2": "The One Where No One's Ready" },
       },
     },
   }));
@@ -41,20 +43,19 @@ test("finds, prepares, and exposes the next missing episode from series details"
     return route.fulfill({
       json: {
         results: [{
-          id: "friends-s01e02",
-          title: "Friends.S01E02.1080p.WEB-DL",
-          size: 1_000_000_000,
+          id: "friends-s03-complete",
+          title: "Friends.S03.COMPLETE.1080p.WEB-DL",
+          size: 20_000_000_000,
           seeders: 12,
           peers: 2,
           source: "Test source",
           category: "series",
-          magnet: "magnet:?xt=urn:btih:FRIENDSS01E02",
+          magnet: "magnet:?xt=urn:btih:FRIENDSS03COMPLETE",
           metadata: {
             displayTitle: "Friends",
             year: 1994,
-            season: 1,
-            episode: 2,
-            seasonPack: false,
+            season: 3,
+            seasonPack: true,
             resolution: "1080p",
             audioLanguages: ["English"],
             subtitleLanguages: ["English"],
@@ -74,18 +75,19 @@ test("finds, prepares, and exposes the next missing episode from series details"
 
   await page.goto("/debrid/series-friends-1994?title=Friends");
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
-  await expect(page.getByText("The One with the Sonogram")).toBeVisible();
-  await page.getByRole("button", { name: "Find S01E02" }).click();
+  await expect(page.getByText("Season 3 is not in your library yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Find Season 3" }).click();
 
   await expect(page.getByRole("heading", { name: /find it.*press play/i })).toBeVisible();
   await expect(page.getByLabel("Search connected sources")).toHaveValue("Friends");
-  await expect(page.getByLabel("Season to search")).toHaveValue("1");
-  await expect(page.getByLabel("Episode to search")).toHaveValue("2");
+  await expect(page.getByLabel("Season to search")).toHaveValue("3");
+  await expect(page.getByLabel("Episode to search")).toHaveValue("");
   await expect(page.getByRole("heading", { name: "Friends (1994)" })).toBeVisible();
   const parameters = new URL(searchUrl).searchParams;
   expect(parameters.get("kind")).toBe("series");
-  expect(parameters.get("season")).toBe("1");
-  expect(parameters.get("episode")).toBe("2");
+  expect(parameters.get("season")).toBe("3");
+  expect(parameters.has("episode")).toBe(false);
+  await expect(page.getByText("Complete season")).toBeVisible();
 
   const prepare = page.getByRole("button", { name: "Prepare", exact: true });
   await expect(prepare).toBeDisabled();
@@ -103,6 +105,7 @@ test("finds, prepares, and exposes the next missing episode from series details"
 
   await page.getByRole("button", { name: "Back to Friends" }).click();
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
-  await expect(page.getByText("The One with the Sonogram")).toBeVisible();
+  await expect(page.getByLabel("Season").locator("option")).toHaveCount(3);
+  await page.getByLabel("Season").selectOption("3");
   await expect(page.locator(".episodes > button")).toHaveCount(2);
 });
