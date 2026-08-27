@@ -72,6 +72,13 @@ valid for that viewer. Set `KHEYFLIX_STREAM_MODE=relay` only as an emergency
 compatibility fallback; relay mode doubles service egress and holds one upstream
 connection per viewer. The AllDebrid API key always remains server-side.
 
+MKV movies use the same authenticated remote stream as FFmpeg input and are
+converted progressively to browser-compatible fragmented MP4 or HLS. Kheyflix
+does not download or store the complete source file. Standard HLS sessions keep
+only a bounded sliding segment window; seeking starts a new ranged stream from
+the requested playback position. AllDebrid still has to report the magnet ready
+and provide an unlockable remote link before playback can begin.
+
 Railway's native GitHub integration deploys production, so it does not require
 a duplicated `RAILWAY_TOKEN` GitHub secret.
 

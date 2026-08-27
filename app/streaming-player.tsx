@@ -30,6 +30,7 @@ import {
   needsCompatiblePlayback,
   playbackSurfaceState,
   QualityMode,
+  releaseTranscoderSession,
   RenditionQuality,
   requiresMutedAutoplay,
   usesBootstrapStream,
@@ -702,30 +703,37 @@ export default function StreamingPlayer({
       if (target === rendition || autoUpgradeRequested.current) return;
       autoUpgradeRequested.current = true;
       const targetAt = absoluteTimeRef.current;
-      const targetSession = newSessionToken();
+      const prewarmSession = newSessionToken();
       const directUpgrade = target === "original" && !compatible;
       const prewarm = directUpgrade
         ? `/api/debrid/stream/${id}/${file}`
-        : `/api/debrid/transcode/${id}/${file}?session=${targetSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
+        : `/api/debrid/transcode/${id}/${file}?session=${prewarmSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
       try {
         const response = await fetch(prewarm, {
           headers: { Range: "bytes=0-1048575" },
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await response.body?.cancel();
+        if (!directUpgrade)
+          await releaseTranscoderSession(fetch, id, file, prewarmSession);
         if (cancelled || !playing) return;
-        persistRef.current(targetAt);
+        const switchAt = absoluteTimeRef.current;
+        persistRef.current(switchAt);
         stopRef.current();
         setLoading(true);
         setError(false);
         setErrorMessage("");
         setLocalTime(0);
-        setOffset(targetAt);
+        setOffset(switchAt);
         setCompatible(!directUpgrade);
         setBootstrap(false);
         setRendition(target);
-        setSession(targetSession);
+        setSession(newSessionToken());
       } catch (reason) {
+        if (!directUpgrade)
+          await releaseTranscoderSession(fetch, id, file, prewarmSession).catch(
+            () => undefined,
+          );
         autoUpgradeRequested.current = false;
         console.warn("[playback] maximum quality prewarm failed", reason);
       }

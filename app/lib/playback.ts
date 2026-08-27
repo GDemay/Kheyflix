@@ -46,6 +46,22 @@ export const requiresMutedAutoplay = (userAgent = "") =>
 export const usesBootstrapStream = (iosPlayback: boolean, bootstrap: boolean) =>
   bootstrap && !iosPlayback;
 
+type PlaybackFetcher = (
+  input: string,
+  init: RequestInit,
+) => Promise<Response>;
+
+export const releaseTranscoderSession = (
+  fetcher: PlaybackFetcher,
+  id: string,
+  file: number,
+  session: string,
+) =>
+  fetcher(`/api/debrid/transcode/${id}/${file}?session=${session}`, {
+    method: "POST",
+    keepalive: true,
+  });
+
 export type PlaybackSurfaceInput = {
   controls: boolean;
   error: boolean;

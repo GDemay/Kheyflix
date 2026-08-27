@@ -115,18 +115,37 @@ const DIRECT_PLAY_MOVIE_EXTENSIONS = new Set(["mp4", "m4v"]);
 const conversionRequiredCodec =
   /(?:^|[ ._[\]()-])(?:x265|h[ ._-]?265|hevc|av1|xvid|e-?ac-?3|dts(?:-?hd)?|truehd|ac-?3)(?=$|[ ._[\]()-])/i;
 
+const extensionFor = (name: string) =>
+  name.split(".").pop()?.toLowerCase() || "";
+
+const isMkvFile = (file: Pick<DebridFile, "name">) =>
+  extensionFor(file.name) === "mkv";
+
+const needsCompatibilityPlayback = (
+  file: Pick<DebridFile, "name">,
+  releaseName = "",
+) => isMkvFile(file) || conversionRequiredCodec.test(`${releaseName} ${file.name}`);
+
 export const isDirectPlayMovieFile = (
   file: Pick<DebridFile, "name">,
   releaseName = "",
 ) =>
   DIRECT_PLAY_MOVIE_EXTENSIONS.has(
-    file.name.split(".").pop()?.toLowerCase() || "",
+    extensionFor(file.name),
   ) && !conversionRequiredCodec.test(`${releaseName} ${file.name}`);
 
 export const directPlayMovieFiles = <T extends Pick<DebridFile, "name">>(
   files: T[],
   releaseName = "",
 ) => files.filter((file) => isDirectPlayMovieFile(file, releaseName));
+
+export const streamableMovieFiles = <T extends Pick<DebridFile, "name">>(
+  files: T[],
+  releaseName = "",
+) =>
+  files.filter(
+    (file) => isMkvFile(file) || isDirectPlayMovieFile(file, releaseName),
+  );
 
 export function groupDebridCatalog(
   magnets: DebridMagnetRecord[],
@@ -174,10 +193,10 @@ export function groupDebridCatalog(
           season,
           episode,
           size: file.size,
-          needsAudioCompatibility:
-            /\b(?:e-?ac-?3|eac3|dts(?:-?hd)?|truehd|ac-?3)\b/i.test(
-              `${magnet.filename} ${file.name}`,
-            ),
+          needsAudioCompatibility: needsCompatibilityPlayback(
+            file,
+            magnet.filename,
+          ),
         });
       });
       existing.addedAt = Math.max(existing.addedAt, magnet.uploadDate || 0);
@@ -186,7 +205,7 @@ export function groupDebridCatalog(
       ).size;
       series.set(key, existing);
     } else {
-      directPlayMovieFiles(magnet.videoFiles, magnet.filename).forEach((file) => {
+      streamableMovieFiles(magnet.videoFiles, magnet.filename).forEach((file) => {
         if (
           magnet.videoFiles.length > 1 &&
           (isAuxiliaryVideo(file.name) || file.size < largestVideo * 0.2)
@@ -213,10 +232,10 @@ export function groupDebridCatalog(
               season: 0,
               episode: 0,
               size: file.size,
-              needsAudioCompatibility:
-                /\b(?:e-?ac-?3|eac3|dts(?:-?hd)?|truehd|ac-?3)\b/i.test(
-                  `${magnet.filename} ${file.name}`,
-                ),
+              needsAudioCompatibility: needsCompatibilityPlayback(
+                file,
+                magnet.filename,
+              ),
             },
           ],
           addedAt: magnet.uploadDate || 0,

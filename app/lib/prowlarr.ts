@@ -108,9 +108,13 @@ const stableId = (magnet: string) => {
   return hash.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
 };
 
+const isMkvRelease = (title: string) =>
+  /\.mkv(?:$|[ ._[\](),-]|[?#])/i.test(title);
+
 const explicitlyRequiresCompatibility = (title: string) =>
-  /(?:^|[ ._[\]()-])(?:x265|h[ ._-]?265|hevc|av1|xvid)(?=$|[ ._[\]()-])/i.test(title) ||
-  /\.(?:mkv|webm|avi|mov|m2?ts)(?:$|[?#])/i.test(title);
+  !isMkvRelease(title) &&
+  (/(?:^|[ ._[\]()-])(?:x265|h[ ._-]?265|hevc|av1|xvid)(?=$|[ ._[\]()-])/i.test(title) ||
+    /\.(?:webm|avi|mov|m2?ts)(?:$|[?#])/i.test(title));
 
 const isOtherCategory = (release: ProwlarrRelease) =>
   Boolean(release.categories?.length) &&
