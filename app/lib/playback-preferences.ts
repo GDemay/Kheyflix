@@ -4,12 +4,16 @@ export const MAX_AUDIO_SYNC_SECONDS = 5;
 export type PlaybackPreferences = {
   audioLanguage: string;
   subtitleLanguage?: string | null;
+  subtitleSize: "small" | "medium" | "large";
+  qualityMode: "auto" | "original" | "1080" | "720" | "480";
   playbackRate: number;
   audioSync: number;
 };
 
 export const defaultPlaybackPreferences = (): PlaybackPreferences => ({
   audioLanguage: "eng",
+  subtitleSize: "medium",
+  qualityMode: "auto",
   playbackRate: DEFAULT_PLAYBACK_RATE,
   audioSync: 0,
 });
@@ -29,6 +33,16 @@ export function parsePlaybackPreferences(
       ? Number(parsed.playbackRate)
       : DEFAULT_PLAYBACK_RATE;
     const rawSync = Number(parsed.audioSync);
+    const subtitleSize = ["small", "medium", "large"].includes(
+      String(parsed.subtitleSize),
+    )
+      ? (parsed.subtitleSize as PlaybackPreferences["subtitleSize"])
+      : "medium";
+    const qualityMode = ["auto", "original", "1080", "720", "480"].includes(
+      String(parsed.qualityMode),
+    )
+      ? (parsed.qualityMode as PlaybackPreferences["qualityMode"])
+      : "auto";
     return {
       audioLanguage:
         typeof parsed.audioLanguage === "string" && parsed.audioLanguage.trim()
@@ -36,6 +50,8 @@ export function parsePlaybackPreferences(
           : "eng",
       playbackRate,
       audioSync: Number.isFinite(rawSync) ? clampSync(rawSync) : 0,
+      subtitleSize,
+      qualityMode,
       ...(typeof parsed.subtitleLanguage === "string" ||
       parsed.subtitleLanguage === null
         ? { subtitleLanguage: parsed.subtitleLanguage }

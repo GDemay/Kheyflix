@@ -335,9 +335,7 @@ export default function StreamingPlayer({
     [firstFrameMs, setFirstFrameMs] = useState<number>(),
     [audio, setAudio] = useState<number>(),
     [subtitle, setSubtitle] = useState<number>(),
-    [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">(
-      "medium",
-    ),
+    [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">("medium"),
     [preferences, setPreferences] = useState(defaultPlaybackPreferences),
     [menu, setMenu] = useState<
       "audio" | "subtitles" | "settings" | null
@@ -594,6 +592,19 @@ export default function StreamingPlayer({
           "eng";
         savedPreferences.audioLanguage = savedAudioLanguage;
         setPreferences(savedPreferences);
+        setSubtitleSize(savedPreferences.subtitleSize);
+        const savedQuality = savedPreferences.qualityMode;
+        if (
+          savedQuality !== "auto" &&
+          availableQualities(value.video[0]?.height || 0).includes(savedQuality)
+        ) {
+          setQualityMode(savedQuality);
+          setRendition(savedQuality);
+          setBootstrap(false);
+        } else {
+          setQualityMode("auto");
+          setRendition("480");
+        }
         const selected = chooseAudioTrack(value.audio, savedAudioLanguage);
         setAudio(selected?.index);
         const preferredSubtitleLanguage =
@@ -1214,7 +1225,10 @@ export default function StreamingPlayer({
                     <button
                       className={subtitleSize === value ? "active" : ""}
                       key={value}
-                      onClick={() => setSubtitleSize(value)}
+                      onClick={() => {
+                        setSubtitleSize(value);
+                        updatePreferences({ subtitleSize: value });
+                      }}
                     >
                       {value}
                     </button>
@@ -1235,6 +1249,7 @@ export default function StreamingPlayer({
                       onClick={() => {
                         const nextQuality = value === "auto" ? "480" : value;
                         setQualityMode(value);
+                        updatePreferences({ qualityMode: value });
                         setBootstrap(false);
                         restart(absoluteTime, audio, nextQuality);
                       }}
