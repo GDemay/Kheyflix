@@ -22,11 +22,11 @@
 ## Acceptance criteria
 | ID | Observable requirement | Test/evidence | Status |
 |---|---|---|---|
-| AC-1 | Next episode retains the selected audio language and selects the matching track when available. | Mocked browser episode-transition test; real catalog verification. | local pass |
-| AC-2 | Next episode retains subtitle language or explicit Off and subtitle size, with safe fallback for unavailable/unsupported tracks. | Unit serialization/fallback tests; mocked browser transition test; real catalog verification. | local pass |
-| AC-3 | Next episode retains playback speed and audio-sync correction. | Unit serialization test; mocked browser transition test. | local pass |
-| AC-4 | Next episode retains quality mode and uses only a quality supported by the next source. | Unit validation test; mocked browser transition test. | local pass |
-| AC-5 | Existing playback, navigation, accessibility labels, and corrupted/legacy preference fallback remain healthy. | Full tests, lint, build, laptop/iPhone user-path checks. | local pass |
+| AC-1 | Next episode retains the selected audio language and selects the matching track when available. | Mocked browser episode-transition test; real catalog verification. | independent local pass |
+| AC-2 | Next episode retains subtitle language or explicit Off and subtitle size, with safe fallback for unavailable/unsupported tracks. | Unit serialization/fallback tests; mocked browser transition test; real catalog verification. | independent local pass |
+| AC-3 | Next episode retains playback speed and audio-sync correction. | Unit serialization test; mocked browser transition test. | independent local pass |
+| AC-4 | Next episode retains quality mode and uses only a quality supported by the next source. | Unit validation test; mocked browser transition test. | independent local pass |
+| AC-5 | Existing playback, navigation, accessibility labels, and corrupted/legacy preference fallback remain healthy. | Full tests, lint, build, laptop/iPhone user-path checks. | independent local pass |
 | AC-6 | Exact merged revision is deployed and healthy, and real-title playback decodes a first frame and advances continuously after the episode switch on laptop and iPhone Safari/simulator. | PR/main CI, `/api/health`, production verifier, measured playback run. | pending |
 
 ## Risk and release
@@ -42,3 +42,4 @@
 - 2026-08-27, RED on `582674c9`: `npm test -- --run app/lib/playback-preferences.test.ts` failed because serialized preferences dropped `subtitleSize: "large"` and `qualityMode: "720"`.
 - 2026-08-27, GREEN candidate: focused preference tests 5/5; episode-transition UI regression passed on phone and laptop projects after selecting French audio, English subtitles, large captions, 720p, 1.25× speed, and -0.4s sync through the controls.
 - 2026-08-27, local gate: full Vitest suite 188/188, ESLint, and production build passed. The pre-existing Playwright port 4173 owner belonged to another worktree; this candidate was verified through its isolated local server on 4174.
+- 2026-08-27, independent gate on `068bfdac`: AC-1 through AC-5 PASS; focused tests 5/5, episode transition 2/2 on phone/laptop, full suite 188/188, lint, and build passed. AC-6 remains UNVERIFIABLE until merge/deployment and real-catalog production playback. The acceptance test was confirmed hermetic at all debrid boundaries.
