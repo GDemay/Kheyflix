@@ -14,8 +14,8 @@ npm ci
 npm run dev
 ```
 
-The ignored `.env.local` enables the catalog, playback, discovery, and Railway
-CLI. `TMDB_READ_ACCESS_TOKEN` is optional and enriches movie metadata.
+The ignored `.env.local` enables the catalog, playback, and discovery.
+`TMDB_READ_ACCESS_TOKEN` is optional and enriches movie metadata.
 
 ## Quality checks
 
@@ -31,17 +31,19 @@ The committed Railway and Nixpacks configuration installs FFmpeg, builds the
 application, starts the web and transcoder processes together, checks
 `/api/health`, and restarts failed deployments.
 
-Kheyflix has isolated `staging` and `production` Railway environments. Deploy
-the current checkout to staging and run its API smoke test with:
+Kheyflix has isolated `staging` and `production` Railway environments. Railway
+control-plane work is performed only through the configured Railway MCP; the
+tracked `npm run deploy:*` commands deliberately fail closed so a local checkout
+cannot upload or alter a service. Use public deployment checks only after an
+approved rollout:
 
 ```sh
-npm run deploy:staging
 npm run verify:staging
 ```
 
-Production automatically deploys canonical GitHub `main`. The manual
-`npm run deploy:production` command is reserved for recovery. Run
-`npm run verify:production` after every production rollout.
+Production automatically deploys canonical GitHub `main`. Run
+`npm run verify:production` and the real-catalog playback suite after every
+production rollout.
 
 See [docs/deployment.md](docs/deployment.md) for environment URLs, secret
 management, promotion, rollback, and troubleshooting.

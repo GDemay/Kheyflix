@@ -1,127 +1,64 @@
 # Deployment runbook
 
+## Authorized boundaries
+
+Kheyflix production is the application service
+`1fb8e716-8ba7-4906-80fd-9226e0eeb43e` in production environment
+`ed9b7bff-19ed-4ff8-9b9f-ff159411c11a`, within project
+`aa2423af-32c8-4dc0-9129-3db69c7e4a5d`. The companion Prowlarr service is
+`5c2d7142-a357-4f99-a8fb-bcf6f47fbee5`.
+
+All Railway control-plane work—service configuration, variables, deployment
+state, logs, metrics, and recovery—uses the configured Railway MCP. Do not use
+a local CLI, token, dashboard, browser, HTTP API, SDK, or alternate account.
+The tracked `npm run deploy:staging` and `npm run deploy:production` commands
+are intentional fail-closed guardrails, not deployment mechanisms.
+
+Before a Railway write, verify the authenticated account and the exact project,
+environment, and service IDs through the MCP. Request explicit approval for a
+destructive operation, including a service or domain removal, storage removal,
+redeploy, staged-deploy acceptance, or an infrastructure-changing agent action.
+
 ## Environments
 
 | Environment | URL | Deployment source | Purpose |
 | --- | --- | --- | --- |
-| Staging | <https://kheyflix-staging.up.railway.app> | Manual CLI upload of the current checkout | Pre-merge and release verification |
-| Production | <https://kheyflix-production.up.railway.app> | Automatic deploy from `GDemay/Kheyflix` `main` | Public service |
+| Staging | <https://kheyflix-staging.up.railway.app> | Approved Railway MCP workflow | Pre-merge verification |
+| Production | <https://kheyflix-production.up.railway.app> | Automatic deployment from `GDemay/Kheyflix` `main` | Public service |
 
-Both environments live in the single canonical Railway project
-`aa2423af-32c8-4dc0-9129-3db69c7e4a5d` and have isolated service variables and
-deployments. They currently use the same authorized AllDebrid/Prowlarr accounts,
-but values are stored separately so either environment can be rotated
-independently.
+Production source remains `GDemay/Kheyflix` on `main`. Never use a fork or a
+local upload as a production source. If the MCP cannot perform a required
+staging or recovery operation, stop and report that capability gap rather than
+substituting another client.
 
-Production runs the GitHub-backed `kheyflix` service. Staging runs the
-source-free `kheyflix-staging` service so new `main` commits cannot replace a
-candidate during pre-merge verification. Keep that staging service disconnected
-from GitHub and deploy it only through `npm run deploy:staging`.
+## Secrets and private dependencies
 
-Each environment also runs an isolated instance of the `prowlarr-production`
-service on port 9696 with its own persistent `/config` volume. Kheyflix reaches
-the instance in its current environment through Railway's private network at
-`http://prowlarr-production.railway.internal:9696`. Prowlarr does not need a
-public domain. Deploy its checked-in image explicitly when its container
-definition changes:
+The canonical local runtime file is the ignored, mode-`0600`
+`/Users/gdemay/Documents/Projects/Kheyflix/.env.local`. Copy it only into a
+new worktree's ignored `.env.local` when local integration testing needs it.
+Never print, commit, place in browser code, or add secret values to a GitHub
+workflow. The required server-side provider values are AllDebrid and Prowlarr
+credentials; the access and internal-transcoder tokens are configured only in
+the approved secret store.
 
-```sh
-railway up prowlarr --path-as-root --service prowlarr-production --environment staging --detach
-railway up prowlarr --path-as-root --service prowlarr-production --environment production --detach
-```
+Prowlarr runs privately on port 9696 with its persistent `/config` volume. The
+application reaches it through the private service address configured in its
+environment. It has no public domain.
 
-Both services require a persistent volume mounted at `/config` plus
-`PROWLARR_API_KEY`, `PORT=9696`, `PUID=0`, `PGID=0`, and the desired `TZ`.
+## Release verification
 
-## Resource profile
+1. On a branch, run `npm ci`, `npm test`, `npm run lint`, `npm run build`, and
+   relevant local UI/playback checks.
+2. Push only to `GDemay/Kheyflix`, open a pull request to `main`, and resolve
+   every CI failure on that branch. Do not merge a red or pending pull request.
+3. Merge through the green pull request. Wait for the `main` workflow associated
+   with that exact merge commit and for the automatic production deployment.
+4. Confirm public `/api/health` reports the exact merge commit and healthy
+   required dependencies. Run `npm run verify:production` and the real-catalog
+   playback suite.
+5. For a playback change, verify a first decoded frame followed by continuously
+   advancing playback on laptop Safari and iPhone Safari (or iOS Simulator).
 
-Every service instance is capped at Railway's minimum 0.5 vCPU and 500 MB of
-memory. The public Kheyflix service uses Railway Serverless in both environments
-and scales to zero when idle. Keep the private Prowlarr services always on:
-Railway does not wake a sleeping private-only service from internal traffic, so
-enabling Serverless there makes discovery fail after the idle timeout. This is
-the lowest stable profile that preserves catalog discovery after cold starts.
-
-## Local secrets
-
-The authoritative local secret store is outside all worktrees:
-
-```text
-/Users/gdemay/Documents/Projects/Kheyflix/.env.local
-```
-
-It must remain mode `0600`. Copy it into a new worktree as ignored runtime
-configuration before local integration work:
-
-```sh
-cp /Users/gdemay/Documents/Projects/Kheyflix/.env.local .env.local
-chmod 600 .env.local
-```
-
-Required server-side values are `ALLDEBRID_API_KEY`, `PROWLARR_URL`, and
-`PROWLARR_API_KEY`. `RAILWAY_TOKEN` enables non-interactive CLI deployments.
-`TMDB_READ_ACCESS_TOKEN` is optional. Never expose any of these to browser code,
-commit them, put them in command output, or add them to a GitHub secret unless a
-GitHub Actions workflow specifically needs that credential.
-
-Native playback uses a control-plane/data-plane split: Kheyflix validates and
-unlocks the selected file, then returns a private, non-cacheable redirect so the
-browser streams bytes directly from AllDebrid. Railway's trusted `X-Real-IP`
-value is forwarded only to AllDebrid's unlock request so the generated URL is
-valid for that viewer. Set `KHEYFLIX_STREAM_MODE=relay` only as an emergency
-compatibility fallback; relay mode doubles service egress and holds one upstream
-connection per viewer. The AllDebrid API key always remains server-side.
-
-MKV movies use the same authenticated remote stream as FFmpeg input and are
-converted progressively to browser-compatible fragmented MP4 or HLS. Kheyflix
-does not download or store the complete source file. Standard HLS sessions keep
-only a bounded sliding segment window; seeking starts a new ranged stream from
-the requested playback position. AllDebrid still has to report the magnet ready
-and provide an unlockable remote link before playback can begin.
-
-Railway's native GitHub integration deploys production, so it does not require
-a duplicated `RAILWAY_TOKEN` GitHub secret.
-
-## Release flow
-
-1. Run `npm ci`, `npm test`, `npm run lint`, and `npm run build`.
-2. Deploy the candidate checkout with `npm run deploy:staging`.
-3. If `prowlarr/` changed, deploy the staging Prowlarr service with the command
-   above.
-4. Wait for Railway to report `SUCCESS` and run `npm run verify:staging`.
-5. Exercise catalog, discovery, detail, and playback flows in the staging UI.
-6. Merge the reviewed pull request into canonical `main`.
-7. If `prowlarr/` changed, deploy the production Prowlarr service.
-8. Wait for the automatic production deployment and run
-   `npm run verify:production`.
-
-The Kheyflix deployment commands pin the canonical project, environment, and
-service IDs, so an unlinked checkout cannot create a duplicate Railway project.
-They use the Railway CLI owner session. For CI, set an environment-scoped
-`RAILWAY_TOKEN` in the runner process; the scripts do not load `.env.local`,
-preventing a production-scoped token from accidentally being used for staging.
-
-## Secret synchronization
-
-Set secrets through stdin so values do not appear in shell history or output:
-
-```sh
-printf '%s' "$ALLDEBRID_API_KEY" | railway variable set ALLDEBRID_API_KEY --stdin --service kheyflix-staging --environment staging
-```
-
-Repeat explicitly for each variable and environment. Verify only variable
-names; Railway JSON variable output includes raw secret values.
-
-## Observability and rollback
-
-```sh
-railway deployment list --service kheyflix-staging --environment staging --json
-railway logs --service kheyflix-staging --environment staging --latest
-railway logs --http --service kheyflix-staging --environment staging --status '>=400' --lines 100
-railway rollback --service kheyflix-staging --environment staging
-```
-
-Use `production` instead of `staging` for production incidents. The Railway
-health check calls `/api/health`; the verification scripts additionally require
-a reachable home page, a non-empty playable AllDebrid catalog, and a working
-Prowlarr discovery response.
+The public health and playback URLs are appropriate for user-visible
+verification. Use the Railway MCP for all control-plane observations and
+actions.
