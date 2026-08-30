@@ -383,6 +383,7 @@ export default function StreamingPlayer({
     nextEpisodeNavigationPending = useRef(false),
     navigationGeneration = useRef(0),
     userPaused = useRef(false),
+    resumeAfterSourceReplacement = useRef(false),
     attachedIosSource = useRef<string>(),
     mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
@@ -715,6 +716,36 @@ export default function StreamingPlayer({
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
   }, [controls, pausedByUser, playing]);
+  const resumeReplacementSource = useCallback(
+    (element: HTMLVideoElement) => {
+      // Changing `src` pauses a native media element. Desktop browsers do not
+      // consistently preserve the previous play request across a cold
+      // compatible rendition, even when the viewer chose that rendition while
+      // the prior source was advancing. Retry at canplay only for that exact
+      // active-viewer handoff; a deliberate pause must stay paused.
+      if (
+        iosPlayback ||
+        userPaused.current ||
+        !resumeAfterSourceReplacement.current
+      )
+        return;
+      void element.play().then(
+        () => {
+          resumeAfterSourceReplacement.current = false;
+        },
+        () => {
+          // A user gesture may still be required for a fresh audible source.
+          // Preserve the safe paused state and make the transport controls
+          // available instead of retrying an autoplay request on every later
+          // ready event or reporting a false media failure.
+          resumeAfterSourceReplacement.current = false;
+          setPlaying(false);
+          setControls(true);
+        },
+      );
+    },
+    [iosPlayback],
+  );
   const stopSessionBeforeReplacement = useCallback(
     async (token: string): Promise<boolean> => {
       if (releasedTranscoderSessions.current.has(token)) return true;
@@ -765,6 +796,16 @@ export default function StreamingPlayer({
       transition: TranscoderSessionTransition = {},
     ): Promise<TranscoderSessionReplacement | false> => {
       if (terminalPlaybackFailure.current) return false;
+      // Capture a deliberate resume before a pending release returns early.
+      // On native HLS, tapping Play while a paused quality handoff is waiting
+      // for capacity release queues the replacement rather than attaching a
+      // source immediately. The successor still needs that resume intent.
+      if (userPaused.current) resumeAfterSourceReplacement.current = false;
+      else if (
+        startedPlayback ||
+        Boolean(video.current && !video.current.paused)
+      )
+        resumeAfterSourceReplacement.current = true;
       if (transcoderSessionReplacementPending.current) {
         // Preserve the latest deliberate player adjustment while the prior
         // job is releasing. This keeps capacity bounded without discarding a
@@ -800,6 +841,7 @@ export default function StreamingPlayer({
         if (transcoded && !transition.skipCurrentStop) {
           releaseConfirmed = await stopSessionBeforeReplacement(activeSession);
           if (!releaseConfirmed) {
+            resumeAfterSourceReplacement.current = false;
             setLoading(false);
             setErrorMessage(
               "The previous stream is still closing. Please try again in a moment.",
@@ -850,7 +892,7 @@ export default function StreamingPlayer({
         else setTranscoderSessionTransition(false);
       }
     },
-    [activeSession, duration, stopSessionBeforeReplacement, transcoded],
+    [activeSession, duration, startedPlayback, stopSessionBeforeReplacement, transcoded],
   );
   const replaceNativeHlsSession = useCallback(
     (position: number, transition?: TranscoderSessionTransition) =>
@@ -943,6 +985,7 @@ export default function StreamingPlayer({
       void element.play().catch(() => undefined);
     } else {
       userPaused.current = true;
+      resumeAfterSourceReplacement.current = false;
       setPausedByUser(true);
       element.pause();
     }
@@ -1300,7 +1343,20 @@ export default function StreamingPlayer({
     attachedIosSource.current = source;
     element.muted = true;
     element.volume = 0;
-    void element.play().catch(() => setControls(true));
+    // Native HLS needs a new `play()` request after an active session rotates,
+    // but a source replacement made while the viewer deliberately paused must
+    // remain paused. The replacement path records that intent before it drops
+    // the previous source.
+    if (userPaused.current || !resumeAfterSourceReplacement.current) return;
+    void element.play().then(
+      () => {
+        resumeAfterSourceReplacement.current = false;
+      },
+      () => {
+        resumeAfterSourceReplacement.current = false;
+        setControls(true);
+      },
+    );
   }, [iosPlayback, iosSourceActivated, source]);
   useEffect(() => {
     // The master request is deliberately withheld until the finite VOD chunk
@@ -1517,6 +1573,10 @@ export default function StreamingPlayer({
           // trusted gesture and can make WebKit retain metadata without
           // advancing to a media segment.
           if (iosPlayback) return;
+          if (resumeAfterSourceReplacement.current) {
+            resumeReplacementSource(event.currentTarget);
+            return;
+          }
           void event.currentTarget.play().catch(() => {
             // Browsers may require a tap before audible playback. Keep audio
             // enabled so that the first user-initiated play starts with sound.
@@ -1581,6 +1641,7 @@ export default function StreamingPlayer({
           recordNativeVodMetadata(source, event.currentTarget);
           startupRetries.current = 0;
           setLoading(false);
+          resumeReplacementSource(event.currentTarget);
           if (!requiresMutedAutoplay(navigator.userAgent)) return;
           event.currentTarget.muted = true;
           event.currentTarget.volume = 0;

@@ -270,6 +270,16 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     .toBeGreaterThan(pausedAt + 8);
   await expect(page.locator(".shard-portal-loader")).toHaveCount(0);
   await page.getByLabel("Playback paused").getByRole("button", { name: "Play" }).click();
+  // The slider updates optimistically for a direct seek. Do not start an
+  // offset compatible rendition until the browser itself has resumed and is
+  // advancing, otherwise this live proof races a cold provider seek instead
+  // of measuring a viewer-continuous quality handoff.
+  const resumedAt = await video.evaluate((element) => element.currentTime);
+  await expect
+    .poll(() => video.evaluate((element) => element.currentTime), {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(resumedAt + 1);
 
   await page.getByRole("button", { name: "Playback settings" }).click();
   await expect(

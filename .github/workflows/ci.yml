@@ -37,7 +37,7 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
       - name: UI smoke tests
         run: npm run test:ui:smoke
-      - name: WebKit player keyboard smoke test
+      - name: WebKit player smoke tests
         run: npm run test:ui:webkit
 
   production-playback:
