@@ -34,6 +34,7 @@ const jobs = new Map(),
   hlsJobs = new Map(),
   bootstrapJobs = new Set(),
   pendingJobs = new Map(),
+  cancelledStartupTokens = new Set(),
   stoppingJobs = new Set(),
   jobTouched = new Map(),
   probes = new Map(),
@@ -72,7 +73,17 @@ const configuredTimeout = (value, fallback, minimum, maximum) => {
 };
 const MAX_JOBS = configuredMaxJobs(process.env.KHEYFLIX_MAX_JOBS || 2),
   BOOTSTRAP_CACHE_TTL_MS = 10 * 60_000,
-  ABANDONED_JOB_TTL_MS = 30_000,
+  ABANDONED_JOB_TTL_MS = configuredTimeout(
+    process.env.KHEYFLIX_ABANDONED_PLAYBACK_TTL_MS,
+    30_000,
+    10,
+    5 * 60_000,
+  ),
+  // A reclaimed encoder must actually exit before its slot can admit a
+  // successor. Keep the wait far below the first-frame budget so a wedged
+  // child still receives the normal retryable busy response.
+  CAPACITY_RECLAIM_WAIT_MS = 2_000,
+  MAX_CANCELLED_STARTUP_TOKENS = 256,
   HLS_STARTUP_TIMEOUT_MS = configuredTimeout(
     process.env.KHEYFLIX_HLS_STARTUP_TIMEOUT_MS,
     30_000,
@@ -115,7 +126,34 @@ const activeJobs = () =>
   subtitleJobs.size +
   pendingJobs.size +
   stoppingJobs.size;
-const reclaimPlaybackCapacity = () => {
+let capacityAdmissionTail = Promise.resolve();
+const withCapacityAdmission = async (operation) => {
+  const previous = capacityAdmissionTail;
+  let release;
+  capacityAdmissionTail = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+};
+const waitForReclaimedPlaybackStop = async (token) => {
+  let timeout;
+  try {
+    return await Promise.race([
+      stopJob(token, true).then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), CAPACITY_RECLAIM_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+const reclaimPlaybackCapacity = async () => {
   while (activeJobs() >= MAX_JOBS) {
     const now = Date.now();
     const candidateToken = [
@@ -148,44 +186,62 @@ const reclaimPlaybackCapacity = () => {
         (jobTouched.get(left) || 0) - (jobTouched.get(right) || 0),
     )[0];
     if (!candidateToken) return false;
+    // `stoppingJobs` deliberately remains counted until the child closes. An
+    // eager next reservation would oversubscribe the service; an eager
+    // rejection turns a reclaimable stale session into a false 429 instead.
+    if (!(await waitForReclaimedPlaybackStop(candidateToken))) return false;
     capacityReclaimed += 1;
-    void stopJob(candidateToken, true);
   }
   return true;
 };
-const reservePlaybackCapacity = (token) => {
-  if (pendingJobs.has(token)) {
-    capacityRejected += 1;
-    return undefined;
-  }
-  if (!reclaimPlaybackCapacity()) {
-    capacityRejected += 1;
-    return undefined;
-  }
-  let resolve;
-  const reservation = {
-    cancelled: false,
-    settled: new Promise((complete) => {
-      resolve = complete;
-    }),
-    resolve,
-  };
-  pendingJobs.set(token, reservation);
-  return reservation;
-};
+const reservePlaybackCapacity = (token, isCancelled = () => false) =>
+  withCapacityAdmission(async () => {
+    if (isCancelled()) return undefined;
+    if (pendingJobs.has(token)) {
+      capacityRejected += 1;
+      return undefined;
+    }
+    if (!(await reclaimPlaybackCapacity())) {
+      capacityRejected += 1;
+      return undefined;
+    }
+    if (isCancelled()) return undefined;
+    let resolve;
+    const reservation = {
+      cancelled: false,
+      settled: new Promise((complete) => {
+        resolve = complete;
+      }),
+      resolve,
+    };
+    pendingJobs.set(token, reservation);
+    return reservation;
+  });
 const reservationIsCurrent = (token, reservation) =>
   Boolean(reservation) &&
   pendingJobs.get(token) === reservation &&
   !reservation.cancelled;
-const cancelPlaybackReservation = (token) => {
-  const reservation = pendingJobs.get(token);
-  if (reservation) reservation.cancelled = true;
-  return reservation;
-};
 const releasePlaybackReservation = (token, reservation) => {
   if (!reservation || pendingJobs.get(token) !== reservation) return;
   pendingJobs.delete(token);
   reservation.resolve();
+};
+const cancelPlaybackReservation = (token) => {
+  const reservation = pendingJobs.get(token);
+  if (!reservation) return undefined;
+  reservation.cancelled = true;
+  releasePlaybackReservation(token, reservation);
+  return reservation;
+};
+const rememberCancelledStartup = (token) => {
+  cancelledStartupTokens.add(token);
+  while (cancelledStartupTokens.size > MAX_CANCELLED_STARTUP_TOKENS)
+    cancelledStartupTokens.delete(cancelledStartupTokens.values().next().value);
+};
+const consumeCancelledStartup = (token) => {
+  if (!cancelledStartupTokens.has(token)) return false;
+  cancelledStartupTokens.delete(token);
+  return true;
 };
 const requestClosed = (request, response) =>
   request.aborted || request.destroyed || response.destroyed || response.writableEnded;
@@ -504,8 +560,16 @@ const server = http.createServer(async (request, response) => {
     }
     const stop = url.pathname.match(/^\/stop\/([a-z0-9-]+)$/i);
     if (stop) {
-      if (hlsJobs.has(stop[1])) hlsMetrics.explicitStops += 1;
-      await waitForStoppedJob(stop[1]);
+      const token = stop[1];
+      if (hlsJobs.has(token)) hlsMetrics.explicitStops += 1;
+      // A replacement request can be queued behind another session's
+      // reclamation before it has a reservation or child of its own. Record
+      // this explicit stop so that late admission cannot revive a session the
+      // player has already released. Existing reservations and live jobs are
+      // cancelled directly below and intentionally remain retryable.
+      if (!jobs.has(token) && !hlsJobs.has(token) && !pendingJobs.has(token))
+        rememberCancelledStartup(token);
+      await waitForStoppedJob(token);
       response.writeHead(204).end();
       return;
     }
@@ -532,9 +596,16 @@ const server = http.createServer(async (request, response) => {
       let job = hlsJobs.get(token);
       let created = false,
         startupAborted = false,
+        startupCancelled = false,
         reservation,
         startupGate;
       const startupKey = mediaKey(id, file);
+      const isStartupCancelled = () => {
+        if (startupAborted || requestClosed(request, response)) return true;
+        if (startupCancelled) return true;
+        startupCancelled = consumeCancelledStartup(token);
+        return startupCancelled;
+      };
       const abortStartup = () => {
         if (!startupAborted) hlsMetrics.startupAborted += 1;
         startupAborted = true;
@@ -552,13 +623,29 @@ const server = http.createServer(async (request, response) => {
         if (!job) {
           if (asset !== "master.m3u8")
             return json(response, 404, { error: "HLS session not found." });
-          if (requestClosed(request, response)) {
+          if (isStartupCancelled()) {
             abandonedStartups += 1;
             return;
           }
-          reservation = reservePlaybackCapacity(token);
-          if (!reservation) return playbackBusy(response);
+          reservation = await reservePlaybackCapacity(
+            token,
+            isStartupCancelled,
+          );
+          if (!reservation) {
+            if (isStartupCancelled()) {
+              abandonedStartups += 1;
+              return;
+            }
+            return playbackBusy(response);
+          }
           try {
+          if (
+            isStartupCancelled() ||
+            !reservationIsCurrent(token, reservation)
+          ) {
+            abandonedStartups += 1;
+            return;
+          }
           const start = nonNegativeNumber(url.searchParams.get("start") || 0),
             audio = selectedStreamIndex(url.searchParams.get("audio")),
             audioSync = url.searchParams.get("sync"),
@@ -588,8 +675,7 @@ const server = http.createServer(async (request, response) => {
               : await probeMedia(id, file),
             directory = join(tmpdir(), `kheyflix-hls-${token}`);
           if (
-            startupAborted ||
-            requestClosed(request, response) ||
+            isStartupCancelled() ||
             !reservationIsCurrent(token, reservation)
           ) {
             abandonedStartups += 1;
@@ -609,8 +695,7 @@ const server = http.createServer(async (request, response) => {
           await rm(directory, { recursive: true, force: true });
           await mkdir(directory, { recursive: true });
           if (
-            startupAborted ||
-            requestClosed(request, response) ||
+            isStartupCancelled() ||
             !reservationIsCurrent(token, reservation)
           ) {
             abandonedStartups += 1;
@@ -706,7 +791,7 @@ const server = http.createServer(async (request, response) => {
             releasePlaybackReservation(token, reservation);
           }
         }
-        if (startupAborted || requestClosed(request, response)) {
+        if (isStartupCancelled()) {
           if (created && job && hlsJobs.get(token) === job)
             await stopJob(token, true);
           return;
@@ -794,10 +879,40 @@ const server = http.createServer(async (request, response) => {
       /^\/subtitle\/(\d+)\/(\d+)\/(\d+)\.vtt$/,
     );
     if (subtitle) {
-      const reservationToken = `subtitle-${crypto.randomUUID()}`,
-        reservation = reservePlaybackCapacity(reservationToken);
-      if (!reservation) return playbackBusy(response);
+      const reservationToken = `subtitle-${crypto.randomUUID()}`;
+      let startupAborted = false;
+      const abortStartup = () => {
+        startupAborted = true;
+        cancelPlaybackReservation(reservationToken);
+      };
+      const abortOnResponseClose = () => {
+        if (!response.writableEnded) abortStartup();
+      };
+      const isStartupCancelled = () =>
+        startupAborted || requestClosed(request, response);
+      request.once("aborted", abortStartup);
+      response.once("close", abortOnResponseClose);
+      const reservation = await reservePlaybackCapacity(
+        reservationToken,
+        isStartupCancelled,
+      );
+      if (!reservation) {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+        if (isStartupCancelled()) {
+          abandonedStartups += 1;
+          return;
+        }
+        return playbackBusy(response);
+      }
       try {
+        if (
+          isStartupCancelled() ||
+          !reservationIsCurrent(reservationToken, reservation)
+        ) {
+          abandonedStartups += 1;
+          return;
+        }
         const subtitleStart = nonNegativeNumber(
           url.searchParams.get("start") || 0,
         ),
@@ -807,7 +922,7 @@ const server = http.createServer(async (request, response) => {
             (item) => item.index === Number(subtitle[3]),
           );
         if (
-          requestClosed(request, response) ||
+          isStartupCancelled() ||
           !reservationIsCurrent(reservationToken, reservation)
         ) {
           abandonedStartups += 1;
@@ -853,6 +968,8 @@ const server = http.createServer(async (request, response) => {
         return;
       } finally {
         releasePlaybackReservation(reservationToken, reservation);
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
       }
     }
     const match = url.pathname.match(/^\/transcode\/(\d+)\/(\d+)$/);
@@ -860,13 +977,51 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(404).end();
       return;
     }
-    const token = url.searchParams.get("token") || crypto.randomUUID(),
-      existing = jobs.get(token);
+    const token = url.searchParams.get("token") || crypto.randomUUID();
+    let child,
+      startupAborted = false,
+      startupCancelled = false;
+    const isStartupCancelled = () => {
+      if (startupAborted || requestClosed(request, response)) return true;
+      if (startupCancelled) return true;
+      startupCancelled = consumeCancelledStartup(token);
+      return startupCancelled;
+    };
+    const abortStartup = () => {
+      startupAborted = true;
+      cancelPlaybackReservation(token);
+      if (child && jobs.get(token) === child) void stopJob(token, true);
+    };
+    const abortOnResponseClose = () => {
+      if (!response.writableEnded) abortStartup();
+    };
+    request.once("aborted", abortStartup);
+    response.once("close", abortOnResponseClose);
+    const existing = jobs.get(token);
     if (existing) await waitForStoppedJob(token);
-    const reservation = reservePlaybackCapacity(token);
-    if (!reservation) return playbackBusy(response);
+    const reservation = await reservePlaybackCapacity(
+      token,
+      isStartupCancelled,
+    );
+    if (!reservation) {
+      request.off("aborted", abortStartup);
+      response.off("close", abortOnResponseClose);
+      if (isStartupCancelled()) {
+        abandonedStartups += 1;
+        return;
+      }
+      return playbackBusy(response);
+    }
     let startupGate;
     try {
+      if (
+        isStartupCancelled() ||
+        !reservationIsCurrent(token, reservation)
+      ) {
+        abandonedStartups += 1;
+        releasePlaybackReservation(token, reservation);
+        return;
+      }
       const start = nonNegativeNumber(url.searchParams.get("start") || 0),
         audio = selectedStreamIndex(url.searchParams.get("audio")),
         audioSync = url.searchParams.get("sync"),
@@ -887,7 +1042,7 @@ const server = http.createServer(async (request, response) => {
         videoCodec = media.video[0]?.codec || "",
         videoHeight = media.video[0]?.height || 0;
       if (
-        requestClosed(request, response) ||
+        isStartupCancelled() ||
         !reservationIsCurrent(token, reservation)
       ) {
         abandonedStartups += 1;
@@ -937,14 +1092,11 @@ const server = http.createServer(async (request, response) => {
         "mp4",
         "pipe:1",
       );
-      const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
       jobs.set(token, child);
       releasePlaybackReservation(token, reservation);
       if (quality === "bootstrap") bootstrapJobs.add(token);
       jobTouched.set(token, Date.now());
-      const terminate = () => {
-        if (jobs.get(token) === child) void stopJob(token, true);
-      };
       let started = false,
         stderrObserved = false;
       const startup = setTimeout(() => {
@@ -992,12 +1144,15 @@ const server = http.createServer(async (request, response) => {
               : "The compatible stream ended before it could start.",
           });
       });
-      request.once("aborted", terminate);
-      response.once("close", terminate);
     } catch (error) {
       settlePlaybackStartup(mediaKey(match[1], match[2]), startupGate);
       releasePlaybackReservation(token, reservation);
       throw error;
+    } finally {
+      if (!child) {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+      }
     }
   } catch {
     if (!response.headersSent && !response.destroyed)

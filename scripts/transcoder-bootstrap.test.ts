@@ -257,6 +257,202 @@ describe("bootstrap transcoder lifecycle", () => {
     await secondReader?.cancel();
   }, 15_000);
 
+  test("admits a startup only after a reclaimed abandoned session has fully stopped", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nprocess.stdout.write('stream-bytes'); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+      { KHEYFLIX_ABANDONED_PLAYBACK_TTL_MS: "25" },
+    );
+
+    const abandoned = await fetch(
+      `${endpoint}/transcode/42/0?token=abandoned-bootstrap&quality=bootstrap`,
+    );
+    const active = await fetch(
+      `${endpoint}/transcode/42/0?token=active-bootstrap&quality=bootstrap`,
+    );
+    const abandonedReader = abandoned.body?.getReader();
+    const activeReader = active.body?.getReader();
+    await abandonedReader?.read();
+    await activeReader?.read();
+    await wait(80);
+    await fetch(`${endpoint}/touch/active-bootstrap`, { method: "POST" });
+
+    const replacement = await fetch(
+      `${endpoint}/transcode/42/0?token=replacement-bootstrap&quality=bootstrap`,
+    );
+
+    expect(replacement.status).toBe(200);
+    const replacementReader = replacement.body?.getReader();
+    await replacementReader?.read();
+    const health = await (await fetch(`${endpoint}/health`)).json();
+    expect(health.capacity).toMatchObject({
+      activeTranscodes: 2,
+      rejected: 0,
+      reclaimed: 1,
+    });
+    await replacementReader?.cancel();
+    await abandonedReader?.cancel();
+    await activeReader?.cancel();
+  }, 15_000);
+
+  test("does not let an aborted queued startup consume a reclaimed slot", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const probeStarted = join(directory, "probe-started");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nconst { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 2000)'], { stdio: 'inherit' }); process.stdout.write('stream-bytes'); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      `#!/usr/bin/env node\nconst { writeFileSync } = require('node:fs'); writeFileSync(${JSON.stringify(probeStarted)}, 'started'); setTimeout(() => { process.stdout.write(JSON.stringify({format:{duration:'120',format_name:'mov,mp4,m4a,3gp,3g2,mj2'},streams:[{index:0,codec_type:'video',codec_name:'h264',width:1280,height:720},{index:1,codec_type:'audio',codec_name:'aac',channels:2}]})); process.exit(0); }, 1000);\n`,
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+      { KHEYFLIX_ABANDONED_PLAYBACK_TTL_MS: "1000" },
+    );
+
+    const abandoned = await fetch(
+      `${endpoint}/transcode/42/0?token=abandoned-bootstrap&quality=bootstrap`,
+    );
+    const active = await fetch(
+      `${endpoint}/transcode/42/0?token=active-bootstrap&quality=bootstrap`,
+    );
+    const abandonedReader = abandoned.body?.getReader();
+    const activeReader = active.body?.getReader();
+    await abandonedReader?.read();
+    await activeReader?.read();
+    await wait(1_100);
+    await fetch(`${endpoint}/touch/active-bootstrap`, { method: "POST" });
+
+    const controller = new AbortController();
+    const abandonedStartup = fetch(
+      `${endpoint}/transcode/42/0?token=aborted-original&quality=original`,
+      { signal: controller.signal },
+    ).catch(() => undefined);
+    const stopDeadline = Date.now() + 1_000;
+    let stopping;
+    while (Date.now() < stopDeadline) {
+      stopping = await (await fetch(`${endpoint}/health`)).json();
+      if (stopping.capacity.stopping === 1) break;
+      await wait(25);
+    }
+    expect(stopping.capacity.stopping).toBe(1);
+    controller.abort();
+    await wait(100);
+
+    const replacement = await fetch(
+      `${endpoint}/transcode/42/0?token=replacement-bootstrap&quality=bootstrap`,
+    );
+
+    expect(replacement.status).toBe(200);
+    await replacement.body?.getReader().cancel();
+    await abandonedStartup;
+    await expect(stat(probeStarted)).rejects.toThrow();
+    const health = await (await fetch(`${endpoint}/health`)).json();
+    expect(health.capacity).toMatchObject({ rejected: 0, pending: 0 });
+    await abandonedReader?.cancel();
+    await activeReader?.cancel();
+  }, 15_000);
+
+  test("honors an explicit stop while a startup is queued behind reclamation", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const probeStarted = join(directory, "probe-started");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nconst { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 2000)'], { stdio: 'inherit' }); process.stdout.write('stream-bytes'); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      `#!/usr/bin/env node\nconst { writeFileSync } = require('node:fs'); writeFileSync(${JSON.stringify(probeStarted)}, 'started'); setTimeout(() => { process.stdout.write(JSON.stringify({format:{duration:'120',format_name:'mov,mp4,m4a,3gp,3g2,mj2'},streams:[{index:0,codec_type:'video',codec_name:'h264',width:1280,height:720},{index:1,codec_type:'audio',codec_name:'aac',channels:2}]})); process.exit(0); }, 1000);\n`,
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+      { KHEYFLIX_ABANDONED_PLAYBACK_TTL_MS: "1000" },
+    );
+
+    const abandoned = await fetch(
+      `${endpoint}/transcode/42/0?token=abandoned-bootstrap&quality=bootstrap`,
+    );
+    const active = await fetch(
+      `${endpoint}/transcode/42/0?token=active-bootstrap&quality=bootstrap`,
+    );
+    const abandonedReader = abandoned.body?.getReader();
+    const activeReader = active.body?.getReader();
+    await abandonedReader?.read();
+    await activeReader?.read();
+    await wait(1_100);
+    await fetch(`${endpoint}/touch/active-bootstrap`, { method: "POST" });
+
+    const controller = new AbortController();
+    const queuedStartup = fetch(
+      `${endpoint}/transcode/42/0?token=stopped-original&quality=original`,
+      { signal: controller.signal },
+    ).catch(() => undefined);
+    const stopDeadline = Date.now() + 1_000;
+    let stopping;
+    while (Date.now() < stopDeadline) {
+      stopping = await (await fetch(`${endpoint}/health`)).json();
+      if (stopping.capacity.stopping === 1) break;
+      await wait(25);
+    }
+    expect(stopping.capacity.stopping).toBe(1);
+
+    const stopped = await fetch(`${endpoint}/stop/stopped-original`, {
+      method: "POST",
+    });
+    expect(stopped.status).toBe(204);
+
+    const reclamationDeadline = Date.now() + 4_000;
+    let released;
+    while (Date.now() < reclamationDeadline) {
+      released = await (await fetch(`${endpoint}/health`)).json();
+      if (
+        released.capacity.stopping === 0 &&
+        released.capacity.pending === 0
+      )
+        break;
+      await wait(25);
+    }
+    expect(released.capacity).toMatchObject({ stopping: 0, pending: 0 });
+    await expect(stat(probeStarted)).rejects.toThrow();
+    controller.abort();
+    await queuedStartup;
+    await abandonedReader?.cancel();
+    await activeReader?.cancel();
+  }, 15_000);
+
   test("starts fixed-profile iPhone HLS without waiting for a media probe", async () => {
     const app = createServer((_request, response) => response.writeHead(200).end());
     servers.push(app);
@@ -666,6 +862,63 @@ describe("bootstrap transcoder lifecycle", () => {
     expect(retry.status).toBe(200);
     await retry.body?.getReader().read();
     expect(await readFile(launches, "utf8")).toBe("1");
+  }, 15_000);
+
+  test("releases subtitle capacity when its metadata-probe client disconnects", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "subtitle-launches"),
+      probeStarted = join(directory, "subtitle-probe-started"),
+      probePayload = JSON.stringify({
+        format: { duration: "120", format_name: "matroska" },
+        streams: [{ index: 2, codec_type: "subtitle", codec_name: "subrip" }],
+      });
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(launches)}, 'started'); process.stdout.write('WEBVTT\\n'); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(probeStarted)}, 'started'); setTimeout(() => { process.stdout.write(${JSON.stringify(probePayload)}); process.exit(0); }, 800);\n`,
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const controller = new AbortController();
+    const subtitle = fetch(`${endpoint}/subtitle/42/0/2.vtt`, {
+      signal: controller.signal,
+    }).catch(() => undefined);
+    const probeDeadline = Date.now() + 1_000;
+    let probing = false;
+    while (Date.now() < probeDeadline) {
+      try {
+        await stat(probeStarted);
+        probing = true;
+        break;
+      } catch {
+        await wait(25);
+      }
+    }
+    expect(probing).toBe(true);
+    const duringProbe = await (await fetch(`${endpoint}/health`)).json();
+    expect(duringProbe.capacity).toMatchObject({ pending: 1, activeSubtitles: 0 });
+
+    controller.abort();
+    await wait(100);
+    const released = await (await fetch(`${endpoint}/health`)).json();
+    expect(released.capacity).toMatchObject({ pending: 0, activeSubtitles: 0 });
+
+    await subtitle;
+    await wait(800);
+    await expect(stat(launches)).rejects.toThrow();
   }, 15_000);
 
   test("returns an HLS startup failure as soon as the encoder exits", async () => {
