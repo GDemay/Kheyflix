@@ -36,6 +36,7 @@ const jobs = new Map(),
   pendingJobs = new Map(),
   cancelledStartupTokens = new Set(),
   stoppingJobs = new Set(),
+  stoppingJobCompletions = new Map(),
   jobTouched = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
@@ -153,6 +154,23 @@ const waitForReclaimedPlaybackStop = async (token) => {
     clearTimeout(timeout);
   }
 };
+const waitForStoppingPlaybackStop = async () => {
+  const completions = Array.from(stoppingJobs, (child) =>
+    stoppingJobCompletions.get(child),
+  ).filter(Boolean);
+  if (!completions.length) return false;
+  let timeout;
+  try {
+    return await Promise.race([
+      Promise.race(completions).then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), CAPACITY_RECLAIM_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
 const reclaimPlaybackCapacity = async () => {
   while (activeJobs() >= MAX_JOBS) {
     const now = Date.now();
@@ -185,7 +203,15 @@ const reclaimPlaybackCapacity = async () => {
       (left, right) =>
         (jobTouched.get(left) || 0) - (jobTouched.get(right) || 0),
     )[0];
-    if (!candidateToken) return false;
+    // An explicit player stop removes its token from the active maps before
+    // the child has closed. The child must still count against capacity, but
+    // a replacement arriving in that small window has no reclaim candidate of
+    // its own. Wait for that already-requested teardown rather than rejecting
+    // a serialized successor with a false busy response.
+    if (!candidateToken) {
+      if (!(await waitForStoppingPlaybackStop())) return false;
+      continue;
+    }
     // `stoppingJobs` deliberately remains counted until the child closes. An
     // eager next reservation would oversubscribe the service; an eager
     // rejection turns a reclaimable stale session into a false 429 instead.
@@ -287,15 +313,23 @@ const internalInputHeaders = () => {
 };
 const stopChild = (child) => {
   if (child.exitCode !== null) return Promise.resolve();
+  const existing = stoppingJobCompletions.get(child);
+  if (existing) return existing;
   stoppingJobs.add(child);
-  return new Promise((resolve) => {
-    const complete = () => {
-      stoppingJobs.delete(child);
-      resolve();
-    };
-    child.once("close", complete);
-    if (!child.killed) child.kill("SIGKILL");
+  let resolve;
+  const completion = new Promise((complete) => {
+    resolve = complete;
   });
+  stoppingJobCompletions.set(child, completion);
+  const complete = () => {
+    stoppingJobs.delete(child);
+    stoppingJobCompletions.delete(child);
+    resolve();
+  };
+  child.once("close", complete);
+  if (child.exitCode !== null) complete();
+  else if (!child.killed) child.kill("SIGKILL");
+  return completion;
 };
 const stopJob = (token, force = false) => {
   cancelPlaybackReservation(token);

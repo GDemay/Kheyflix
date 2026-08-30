@@ -13,7 +13,7 @@ vi.mock("../../../../../lib/observability", () => ({
   writeRequestLog: vi.fn(),
 }));
 
-import { GET } from "./route";
+import { GET, POST } from "./route";
 
 const context = { params: Promise.resolve({ id: "42", file: "0" }) };
 
@@ -64,5 +64,38 @@ describe("compatible playback gateway", () => {
     expect(upstream).toContain("start=0&audio=1&sync=0&token=");
     expect(upstream).toContain("&quality=480");
     expect(upstream).not.toContain("***");
+  });
+
+  it("continues a bounded stop relay after the browser request is cancelled", async () => {
+    process.env.KHEYFLIX_TRANSCODER_URL = "http://transcoder.test";
+    const browser = new AbortController();
+    const request = new Request(
+      "https://kheyflix.test/api/debrid/transcode/42/0?session=closing-42",
+      { method: "POST", signal: browser.signal },
+    );
+    let relaySignal: AbortSignal | null = null;
+    let resolveRelay: (response: Response) => void;
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          relaySignal = init?.signal ?? null;
+          resolveRelay = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = POST(request);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    browser.abort();
+
+    expect(request.signal.aborted).toBe(true);
+    expect(relaySignal).not.toBe(request.signal);
+    expect(relaySignal?.aborted).toBe(false);
+    resolveRelay!(new Response(null, { status: 204 }));
+    expect((await response).status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://transcoder.test/stop/closing-42",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });
