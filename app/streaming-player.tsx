@@ -108,6 +108,17 @@ type NativeVodPrewarm = {
   start: number;
 };
 
+const RELEASED_TRANSCODER_SESSION_LIMIT = 256;
+
+const rememberReleasedTranscoderSession = (sessions: Set<string>, token: string) => {
+  sessions.add(token);
+  while (sessions.size > RELEASED_TRANSCODER_SESSION_LIMIT) {
+    const oldest = sessions.values().next().value;
+    if (!oldest) break;
+    sessions.delete(oldest);
+  }
+};
+
 class MediaInfoHttpError extends Error {
   constructor(readonly status: number) {
     super(`Media information is unavailable (HTTP ${status}).`);
@@ -326,6 +337,9 @@ export default function StreamingPlayer({
     nativeVodPrewarm = useRef<NativeVodPrewarm>(),
     nativeVodPrewarmGeneration = useRef(0),
     nativeVodPrewarmPending = useRef(false),
+    releasedTranscoderSessions = useRef(new Set<string>()),
+    bestEffortStoppedTranscoderSessions = useRef(new Set<string>()),
+    releasingTranscoderSessions = useRef(new Map<string, Promise<void>>()),
     autoUpgradeRequested = useRef<RenditionQuality | null>(null),
     // Metadata failures that are safe to surface are authoritative. A media
     // element can report its own error in the same event turn while a
@@ -550,9 +564,22 @@ export default function StreamingPlayer({
     : route.title || currentQueue?.label || "Kheyflix video";
   const stop = useCallback(
     (token = session) => {
+      if (
+        releasedTranscoderSessions.current.has(token) ||
+        bestEffortStoppedTranscoderSessions.current.has(token) ||
+        releasingTranscoderSessions.current.has(token)
+      )
+        return;
+      // A beacon has no response to await. Keep it distinct from an awaited
+      // release so a later source replacement can still make an explicit,
+      // capacity-safe stop request if this best-effort send was lost.
+      rememberReleasedTranscoderSession(
+        bestEffortStoppedTranscoderSessions.current,
+        token,
+      );
       const url = `/api/debrid/transcode/${id}/${file}?session=${token}`;
-      if (navigator.sendBeacon) navigator.sendBeacon(url);
-      else void fetch(url, { method: "POST", keepalive: true });
+      if (navigator.sendBeacon?.(url)) return;
+      void fetch(url, { method: "POST", keepalive: true });
     },
     [file, id, session],
   );
@@ -643,22 +670,37 @@ export default function StreamingPlayer({
   }, [controls, pausedByUser, playing]);
   const stopSessionBeforeReplacement = useCallback(
     async (token: string) => {
+      if (releasedTranscoderSessions.current.has(token)) return;
+      const existingRelease = releasingTranscoderSessions.current.get(token);
+      if (existingRelease) {
+        await existingRelease;
+        return;
+      }
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 3_000);
-      try {
-        await releaseTranscoderSession(
-          fetch,
-          String(id),
-          file,
-          token,
-          controller.signal,
-        );
-      } catch {
-        // The replacement still has bounded server-side admission. A
-        // best-effort stop must not strand the viewer on a paused frame.
-      } finally {
-        window.clearTimeout(timeout);
-      }
+      const release = Promise.resolve()
+        .then(() =>
+          releaseTranscoderSession(
+            fetch,
+            String(id),
+            file,
+            token,
+            controller.signal,
+          ),
+        )
+        .then(() => {
+          rememberReleasedTranscoderSession(releasedTranscoderSessions.current, token);
+        })
+        .catch(() => {
+          // The replacement still has bounded server-side admission. A
+          // best-effort stop must not strand the viewer on a paused frame.
+        })
+        .finally(() => {
+          window.clearTimeout(timeout);
+          releasingTranscoderSessions.current.delete(token);
+        });
+      releasingTranscoderSessions.current.set(token, release);
+      await release;
     },
     [file, id],
   );

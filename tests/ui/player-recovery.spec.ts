@@ -400,9 +400,12 @@ test("a finite native VOD chunk advances Safari at its exact absolute position",
   await page.route("**/api/debrid/hls/42/0/**", async (route) => {
     await route.fulfill({ status: 204 });
   });
-  let sessionStops = 0;
+  const sessionStops: string[] = [];
   await page.route("**/api/debrid/transcode/42/0**", async (route) => {
-    if (route.request().method() === "POST") sessionStops += 1;
+    if (route.request().method() === "POST")
+      sessionStops.push(
+        new URL(route.request().url()).searchParams.get("session") || "",
+      );
     await route.fulfill({ status: 204 });
   });
 
@@ -414,6 +417,7 @@ test("a finite native VOD chunk advances Safari at its exact absolute position",
   await expect(video).toHaveJSProperty("controls", false);
   const first = await video.getAttribute("src");
   expect(first).toBeTruthy();
+  const firstSession = new URL(first!, "http://localhost").pathname.split("/")[6];
   expect(new URL(first!, "http://localhost").searchParams.get("mode")).toBe(
     "native-vod",
   );
@@ -431,7 +435,9 @@ test("a finite native VOD chunk advances Safari at its exact absolute position",
     element.dispatchEvent(new Event("ended", { bubbles: true }));
   });
 
-  await expect.poll(() => sessionStops).toBe(1);
+  await expect.poll(
+    () => sessionStops.filter((session) => session === firstSession).length,
+  ).toBe(1);
   await expect.poll(async () => video.getAttribute("src")).not.toBe(first);
   const next = new URL((await video.getAttribute("src"))!, "http://localhost");
   expect(next.searchParams.get("start")).toBe("15");
