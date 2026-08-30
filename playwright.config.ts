@@ -37,6 +37,7 @@ export default defineConfig({
     { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" } },
     { name: "tablet", use: { ...devices["iPad (gen 7)"], browserName: "chromium" } },
     { name: "laptop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
+    { name: "webkit", use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } } },
   ],
   webServer: externalBaseUrl
     ? undefined

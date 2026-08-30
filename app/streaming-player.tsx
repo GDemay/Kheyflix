@@ -159,6 +159,16 @@ const languageName = (code: string, title = "") =>
     und: "Original",
   }[code.toLowerCase()] ||
   code.toUpperCase();
+
+const isInteractiveKeyboardTarget = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "button, a[href], input, select, textarea, [contenteditable], [role=button], [role=link], [role=menuitem], [role=option], [role=slider], [role=textbox], [role=combobox], [role=spinbutton]",
+    ),
+  );
+};
+
 function IconButton({
   label,
   onClick,
@@ -476,6 +486,7 @@ export default function StreamingPlayer({
     [errorMessage, setErrorMessage] = useState(""),
     [mediaInfoAttempt, setMediaInfoAttempt] = useState(0),
     [controls, setControls] = useState(true),
+    [keyboardFocusWithin, setKeyboardFocusWithin] = useState(false),
     [transcoderSessionTransition, setTranscoderSessionTransition] = useState(false);
   const viewerPlaybackRequestedAt = useRef<number>();
   const transcoded =
@@ -1340,15 +1351,12 @@ export default function StreamingPlayer({
   }, [firstFrameMs, loading, nativeHlsPlayback, playing, promoteAutoQuality, qualityMode, sessionConfiguration.bootstrap, sessionConfiguration.rendition, sourceHeight, sustainedCompatibility, transcoded]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLSelectElement
-      )
-        return;
       if (event.key === "Escape") {
         if (menu) setMenu(null);
         else safeBack();
+        return;
       }
+      if (isInteractiveKeyboardTarget(event.target)) return;
       if (event.code === "Space") {
         event.preventDefault();
         toggle();
@@ -1378,7 +1386,7 @@ export default function StreamingPlayer({
   }, []);
   return (
     <main
-      className={`player-shell ${controls || !playing ? "controls-visible" : ""} ${surfaces.dimVideo ? "video-dimmed" : ""} subtitle-${subtitleSize}`}
+      className={`player-shell ${controls || !playing || keyboardFocusWithin ? "controls-visible" : ""} ${surfaces.dimVideo ? "video-dimmed" : ""} subtitle-${subtitleSize}`}
       data-playback-phase={effectiveBootstrap ? "bootstrap" : "standard"}
       data-playback-quality={activeQuality}
       data-playback-state={error ? "error" : loading ? "loading" : playing ? "playing" : "paused"}
@@ -1400,6 +1408,23 @@ export default function StreamingPlayer({
       }
       data-first-frame-ms={firstFrameMs === undefined ? undefined : Math.round(firstFrameMs)}
       ref={shell}
+      onFocusCapture={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.matches(":focus-visible")
+        ) {
+          setKeyboardFocusWithin(true);
+          showControls();
+        }
+      }}
+      onBlurCapture={(event) => {
+        if (
+          !(event.relatedTarget instanceof Node) ||
+          !event.currentTarget.contains(event.relatedTarget)
+        )
+          setKeyboardFocusWithin(false);
+      }}
+      onPointerDownCapture={() => setKeyboardFocusWithin(false)}
       onMouseMove={(event) => {
         const pointer = { x: event.clientX, y: event.clientY };
         if (
