@@ -17,7 +17,11 @@ import {
 const DEFAULT_FIRST_BYTE_TIMEOUT_MS = 3_000;
 const MIN_FIRST_BYTE_TIMEOUT_MS = 250;
 const MAX_FIRST_BYTE_TIMEOUT_MS = 8_000;
+const DEFAULT_STREAM_STARTUP_TIMEOUT_MS = 8_000;
+const MIN_STREAM_STARTUP_TIMEOUT_MS = 250;
+const MAX_STREAM_STARTUP_TIMEOUT_MS = 30_000;
 const MAX_PROVIDER_REDIRECTS = 3;
+const PROVIDER_CLEANUP_TIMEOUT_MS = 1_000;
 
 type RelayUpstream = {
   response: Response;
@@ -33,7 +37,24 @@ type PinnedHttpsTarget = {
 
 type ProviderResponse = {
   response: Response;
-  release: () => Promise<void>;
+  release: (signal?: AbortSignal) => Promise<void>;
+};
+
+type StreamStartupBudget = {
+  signal: AbortSignal;
+  elapsedMs: () => number;
+  remainingMs: () => number;
+  timedOut: () => boolean;
+  clientAborted: () => boolean;
+  run: <T>(operation: () => Promise<T>) => Promise<T>;
+  succeed: () => void;
+  dispose: () => void;
+};
+
+type StreamStartupAttempt = {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  dispose: () => void;
 };
 
 const clientIp = (request: Request) => {
@@ -60,6 +81,85 @@ const firstByteTimeoutMs = () => {
     configured <= MAX_FIRST_BYTE_TIMEOUT_MS
     ? configured
     : DEFAULT_FIRST_BYTE_TIMEOUT_MS;
+};
+
+const streamStartupTimeoutMs = () => {
+  const configured = Number(process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS);
+  return Number.isSafeInteger(configured) &&
+    configured >= MIN_STREAM_STARTUP_TIMEOUT_MS &&
+    configured <= MAX_STREAM_STARTUP_TIMEOUT_MS
+    ? configured
+    : DEFAULT_STREAM_STARTUP_TIMEOUT_MS;
+};
+
+const createStreamStartupBudget = (request: Request): StreamStartupBudget => {
+  const controller = new AbortController();
+  const startedAt = performance.now();
+  const deadlineAt = Date.now() + streamStartupTimeoutMs();
+  let expired = false;
+  let completed = false;
+  const expireIfDue = () => {
+    if (expired || completed || Date.now() < deadlineAt) return;
+    expired = true;
+    controller.abort(new DOMException("The media source startup timed out.", "TimeoutError"));
+  };
+  const abortForClient = () => controller.abort(request.signal.reason);
+  if (request.signal.aborted) abortForClient();
+  else request.signal.addEventListener("abort", abortForClient, { once: true });
+  const timer = setTimeout(expireIfDue, Math.max(1, deadlineAt - Date.now()));
+  return {
+    signal: controller.signal,
+    elapsedMs: () => performance.now() - startedAt,
+    remainingMs: () => {
+      expireIfDue();
+      return Math.max(0, deadlineAt - Date.now());
+    },
+    timedOut: () => {
+      expireIfDue();
+      return expired;
+    },
+    clientAborted: () => request.signal.aborted,
+    run: <T>(operation: () => Promise<T>) => {
+      expireIfDue();
+      if (controller.signal.aborted)
+        return Promise.reject<T>(abortReason(controller.signal));
+      return awaitAbortable(operation(), controller.signal);
+    },
+    succeed: () => {
+      expireIfDue();
+      if (expired) return;
+      if (completed) return;
+      completed = true;
+      clearTimeout(timer);
+    },
+    dispose: () => {
+      clearTimeout(timer);
+      request.signal.removeEventListener("abort", abortForClient);
+    },
+  };
+};
+
+const createStreamStartupAttempt = (
+  startup: StreamStartupBudget,
+): StreamStartupAttempt => {
+  const controller = new AbortController();
+  let expired = false;
+  startup.timedOut();
+  const abortForStartup = () => controller.abort(startup.signal.reason);
+  if (startup.signal.aborted) abortForStartup();
+  else startup.signal.addEventListener("abort", abortForStartup, { once: true });
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort(new DOMException("The provider did not produce media in time.", "TimeoutError"));
+  }, Math.max(1, Math.min(firstByteTimeoutMs(), startup.remainingMs())));
+  return {
+    signal: controller.signal,
+    timedOut: () => expired,
+    dispose: () => {
+      clearTimeout(timer);
+      startup.signal.removeEventListener("abort", abortForStartup);
+    },
+  };
 };
 
 const privateIpv4 = (address: string) => {
@@ -171,7 +271,15 @@ const awaitAbortable = <T>(
   onAbort?: () => void,
 ) => {
   if (!signal) return operation;
-  throwIfAborted(signal);
+  if (signal.aborted) {
+    try {
+      onAbort?.();
+    } catch {
+      // Cancellation must not wait for best-effort cleanup.
+    }
+    void operation.catch(() => undefined);
+    return Promise.reject<T>(abortReason(signal));
+  }
   return new Promise<T>((resolve, reject) => {
     const cleanup = () => signal.removeEventListener("abort", abort);
     const abort = () => {
@@ -270,26 +378,23 @@ const resolvePinnedHttpsTarget = async (value: string, signal?: AbortSignal) => 
   }
 };
 
-const validateDirectMediaUrl = async (value: string, request: Request) => {
-  const controller = new AbortController();
-  let timedOut = false;
-  const abortForClient = () => controller.abort(request.signal.reason);
-  if (request.signal.aborted) abortForClient();
-  else request.signal.addEventListener("abort", abortForClient, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, firstByteTimeoutMs());
+const validateDirectMediaUrl = async (
+  value: string,
+  startup: StreamStartupBudget,
+) => {
+  const attempt = createStreamStartupAttempt(startup);
   try {
-    return Boolean(await resolvePinnedHttpsTarget(value, controller.signal));
+    return Boolean(
+      await startup.run(() => resolvePinnedHttpsTarget(value, attempt.signal)),
+    );
   } catch (error) {
-    if (request.signal.aborted)
+    if (startup.clientAborted())
       throw new AllDebridError(
         "The playback request was canceled.",
         "STREAM_REQUEST_ABORTED",
         499,
       );
-    if (timedOut)
+    if (startup.timedOut() || attempt.timedOut())
       throw new AllDebridError(
         "The media source is taking too long to respond.",
         "STREAM_UPSTREAM_TIMEOUT",
@@ -298,8 +403,7 @@ const validateDirectMediaUrl = async (value: string, request: Request) => {
       );
     throw error;
   } finally {
-    clearTimeout(timer);
-    request.signal.removeEventListener("abort", abortForClient);
+    attempt.dispose();
   }
 };
 
@@ -345,14 +449,48 @@ const inlineFilename = (name: string) => {
   return normalized || "video";
 };
 
+const boundedCleanupSignal = (signal?: AbortSignal) =>
+  signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(PROVIDER_CLEANUP_TIMEOUT_MS)])
+    : AbortSignal.timeout(PROVIDER_CLEANUP_TIMEOUT_MS);
+
+const cancelCleanup = async (
+  operation: Promise<void>,
+  signal?: AbortSignal,
+) => {
+  try {
+    await awaitAbortable(operation, boundedCleanupSignal(signal));
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // Cleanup is best-effort once a provider response is no longer usable.
+  }
+};
+
 const cancelBody = async (
   body: ReadableStream<Uint8Array> | null,
   reason?: unknown,
+  signal?: AbortSignal,
+) => {
+  const cancellation = body?.cancel(reason);
+  if (!cancellation) return;
+  await cancelCleanup(cancellation, signal);
+};
+
+const cancelReader = async (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reason?: unknown,
+  signal?: AbortSignal,
+) => cancelCleanup(reader.cancel(reason), signal);
+
+const cancelProviderResponse = async (
+  provider: ProviderResponse,
+  reason?: unknown,
+  signal?: AbortSignal,
 ) => {
   try {
-    await body?.cancel(reason);
-  } catch {
-    // A response can already be canceled when a client navigates away.
+    await cancelBody(provider.response.body, reason, signal);
+  } finally {
+    await provider.release(signal);
   }
 };
 
@@ -409,11 +547,11 @@ const pinnedHttpsDispatcher = (target: PinnedHttpsTarget) => {
   let released = false;
   return {
     dispatcher: agent,
-    release: async () => {
+    release: async (signal?: AbortSignal) => {
       if (released) return;
       released = true;
       try {
-        await agent.close();
+        await awaitAbortable(agent.close(), boundedCleanupSignal(signal), () => agent.destroy());
       } catch {
         agent.destroy();
       }
@@ -467,14 +605,19 @@ const fetchProviderResponse = async (
   request: Request,
   range: string | null,
   signal: AbortSignal,
+  startup: StreamStartupBudget,
 ): Promise<ProviderResponse> => {
+  const throwIfStartupExpired = () => {
+    startup.timedOut();
+    throwIfAborted(signal);
+  };
   let url = initialUrl;
   const headers = {
     "Accept-Encoding": "identity",
     ...(range ? { Range: range } : {}),
   };
   for (let redirect = 0; redirect <= MAX_PROVIDER_REDIRECTS; redirect += 1) {
-    throwIfAborted(signal);
+    throwIfStartupExpired();
     const target = await resolvePinnedHttpsTarget(url, signal);
     if (!target)
       throw new AllDebridError(
@@ -482,11 +625,12 @@ const fetchProviderResponse = async (
         "STREAM_URL_UNSAFE",
         502,
       );
-    throwIfAborted(signal);
+    throwIfStartupExpired();
     const pinned = pinnedHttpsDispatcher(target);
     let response: Response;
     try {
-      response = await fetch(url, {
+      throwIfStartupExpired();
+      const responseOperation = fetch(url, {
         method: request.method,
         headers,
         redirect: "manual",
@@ -495,15 +639,15 @@ const fetchProviderResponse = async (
         // without changing the public Fetch API used by browser code.
         dispatcher: pinned.dispatcher,
       } as RequestInit & { dispatcher: Agent });
+      response = await awaitAbortable(responseOperation, signal);
     } catch (error) {
-      await pinned.release();
+      await pinned.release(signal);
       throw error;
     }
     if (!redirectStatus(response.status))
       return { response, release: pinned.release };
     const location = response.headers.get("location");
-    await cancelBody(response.body);
-    await pinned.release();
+    await cancelProviderResponse({ response, release: pinned.release }, undefined, signal);
     if (!location)
       throw new AllDebridError(
         "The media source returned an invalid redirect.",
@@ -563,7 +707,7 @@ const primedBody = (
     if (canceled) return;
     canceled = true;
     try {
-      await reader.cancel(reason);
+      await cancelReader(reader, reason);
     } catch {
       // The source can close between the viewer canceling and this callback.
     } finally {
@@ -598,38 +742,33 @@ const openRelayUpstream = async (
   url: string,
   request: Request,
   range: string | null,
+  startup: StreamStartupBudget,
 ): Promise<RelayUpstream> => {
-  const controller = new AbortController();
-  let timedOut = false;
-  let clientAborted = request.signal.aborted;
+  const attempt = createStreamStartupAttempt(startup);
+  let clientAborted = startup.clientAborted();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let provider: ProviderResponse | undefined;
   let transferredClientAbort = false;
   let cancelAfterStartup: ((reason?: unknown) => Promise<void>) | undefined;
   const abortForClient = () => {
     clientAborted = true;
-    controller.abort(request.signal.reason);
     if (cancelAfterStartup) void cancelAfterStartup(request.signal.reason);
   };
   if (clientAborted) abortForClient();
   else request.signal.addEventListener("abort", abortForClient, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, firstByteTimeoutMs());
   const startedAt = performance.now();
 
   try {
-    provider = await fetchProviderResponse(
+    provider = await startup.run(() => fetchProviderResponse(
       url,
       request,
       range,
-      controller.signal,
-    );
+      attempt.signal,
+      startup,
+    ));
     const { response } = provider;
     if (range && response.ok && !rangeMatchesResponse(range, response)) {
-      await cancelBody(response.body);
-      await provider.release();
+      await cancelProviderResponse(provider, undefined, attempt.signal);
       provider = undefined;
       throw new AllDebridError(
         "The media source returned an invalid byte range.",
@@ -644,13 +783,12 @@ const openRelayUpstream = async (
         body: response.body,
         firstByteMs: performance.now() - startedAt,
         cancel: async (reason) => {
-          await cancelBody(response.body, reason);
-          await provider?.release();
+          if (provider)
+            await cancelProviderResponse(provider, reason, startup.signal);
         },
       };
     if (nonIdentityEncoding(response)) {
-      await cancelBody(response.body);
-      await provider.release();
+      await cancelProviderResponse(provider, undefined, attempt.signal);
       provider = undefined;
       throw new AllDebridError(
         "The media source returned an unsupported encoding.",
@@ -660,7 +798,7 @@ const openRelayUpstream = async (
       );
     }
     if (!response.body) {
-      await provider.release();
+      await provider.release(attempt.signal);
       provider = undefined;
       throw new AllDebridError(
         "The media source returned no playable data.",
@@ -671,14 +809,23 @@ const openRelayUpstream = async (
     }
 
     reader = response.body.getReader();
-    let first = await reader.read();
+    let first = await awaitAbortable(
+      reader.read(),
+      attempt.signal,
+      () => void reader?.cancel(abortReason(attempt.signal)).catch(()=>undefined),
+    );
     // A compliant stream may emit an empty chunk before payload bytes. Keep
     // waiting within the same bounded first-byte deadline rather than calling
     // an empty stream a successful startup.
-    while (!first.done && !first.value.byteLength) first = await reader.read();
+    while (!first.done && !first.value.byteLength)
+      first = await awaitAbortable(
+        reader.read(),
+        attempt.signal,
+        () => void reader?.cancel(abortReason(attempt.signal)).catch(()=>undefined),
+      );
     if (first.done) {
-      await reader.cancel();
-      await provider.release();
+      await cancelReader(reader, undefined, attempt.signal);
+      await provider.release(attempt.signal);
       provider = undefined;
       throw new AllDebridError(
         "The media source returned no playable data.",
@@ -693,7 +840,7 @@ const openRelayUpstream = async (
     });
     reader = undefined;
     cancelAfterStartup = replay.cancel;
-    if (clientAborted || request.signal.aborted) {
+    if (clientAborted || startup.clientAborted()) {
       await replay.cancel(request.signal.reason);
       throw new AllDebridError(
         "The playback request was canceled.",
@@ -712,18 +859,21 @@ const openRelayUpstream = async (
       },
     };
   } catch (error) {
-    if (reader) void reader.cancel().catch(() => undefined);
+    if (reader) void cancelReader(reader).catch(() => undefined);
     if (provider) {
-      await cancelBody(provider.response.body);
-      await provider.release();
+      try {
+        await cancelProviderResponse(provider, undefined, attempt.signal);
+      } catch {
+        // Preserve the startup/cancellation error that reached this handler.
+      }
     }
-    if (clientAborted || request.signal.aborted)
+    if (clientAborted || startup.clientAborted())
       throw new AllDebridError(
         "The playback request was canceled.",
         "STREAM_REQUEST_ABORTED",
         499,
       );
-    if (timedOut)
+    if (startup.timedOut() || attempt.timedOut())
       throw new AllDebridError(
         "The media source is taking too long to respond.",
         "STREAM_UPSTREAM_TIMEOUT",
@@ -738,7 +888,7 @@ const openRelayUpstream = async (
       true,
     );
   } finally {
-    clearTimeout(timer);
+    attempt.dispose();
     if (!transferredClientAbort)
       request.signal.removeEventListener("abort", abortForClient);
   }
@@ -750,25 +900,48 @@ async function handle(
 ) {
   const blocked = await requireProviderAccess(request);
   if (blocked) return blocked;
+  let startup: StreamStartupBudget | undefined;
   try {
     const { id, file } = await params;
     const mediaId = Number(id);
     const fileIndex = Number(file);
     const range = singleByteRange(request.headers.get("range"));
+    const activeStartup = createStreamStartupBudget(request);
+    startup = activeStartup;
+    const ensureStartupActive = () => {
+      if (activeStartup.clientAborted())
+        throw new AllDebridError(
+          "The playback request was canceled.",
+          "STREAM_REQUEST_ABORTED",
+          499,
+        );
+      if (activeStartup.timedOut())
+        throw new AllDebridError(
+          "The media source is taking too long to respond.",
+          "STREAM_UPSTREAM_TIMEOUT",
+          504,
+          true,
+        );
+    };
+    try {
     // Relay by default so one account is never unlocked against every
     // viewer's changing phone, laptop, VPN, or mobile-network IP address.
     // Direct mode is an explicit opt-in for deployments with provider-safe
     // network controls.
     const relay = process.env.KHEYFLIX_STREAM_MODE !== "direct";
     const ip = relay ? undefined : clientIp(request);
-    let media = await resolveVideo(mediaId, fileIndex, ip);
+    let media = await activeStartup.run(() =>
+      resolveVideo(mediaId, fileIndex, ip, false, { signal: activeStartup.signal }),
+    );
     if (!relay) {
-      if (!(await validateDirectMediaUrl(media.url, request)))
+      if (!(await validateDirectMediaUrl(media.url, activeStartup)))
         throw new AllDebridError(
           "The media service returned an unsafe stream URL.",
           "STREAM_URL_UNSAFE",
           502,
         );
+      ensureStartupActive();
+      activeStartup.succeed();
       return new Response(null, {
         status: 307,
         headers: {
@@ -781,14 +954,17 @@ async function handle(
     }
 
     const refreshLink = async () => {
-      media = await resolveVideo(mediaId, fileIndex, ip, true);
+      media = await activeStartup.run(() =>
+        resolveVideo(mediaId, fileIndex, ip, true, { signal: activeStartup.signal }),
+      );
     };
     let upstream: RelayUpstream;
     let recoveryReason: string | undefined;
     let recoveryUsed = false;
     try {
-      upstream = await openRelayUpstream(media.url, request, range);
+      upstream = await openRelayUpstream(media.url, request, range, activeStartup);
     } catch (error) {
+      ensureStartupActive();
       if (!retryablePreForwardFailure(error)) throw error;
       recoveryUsed = true;
       recoveryReason =
@@ -796,7 +972,7 @@ async function handle(
           ? error.code
           : "STREAM_UPSTREAM_RETRY";
       await refreshLink();
-      upstream = await openRelayUpstream(media.url, request, range);
+      upstream = await openRelayUpstream(media.url, request, range, activeStartup);
     }
 
     // Temporary provider links can expire between resolution and the first
@@ -807,11 +983,12 @@ async function handle(
       !upstream.response.ok &&
       retryableUpstreamStatus(upstream.response.status)
     ) {
+      ensureStartupActive();
       recoveryUsed = true;
       recoveryReason = `status_${upstream.response.status}`;
       await upstream.cancel();
       await refreshLink();
-      upstream = await openRelayUpstream(media.url, request, range);
+      upstream = await openRelayUpstream(media.url, request, range, activeStartup);
     }
     const unusableGetResponse =
       request.method === "GET" &&
@@ -824,6 +1001,7 @@ async function handle(
       !upstream.response.ok ||
       (!upstream.body && request.method !== "HEAD")
     ) {
+      ensureStartupActive();
       await upstream.cancel();
       return Response.json(
         {
@@ -842,6 +1020,7 @@ async function handle(
       writeLog("warn", "debrid.stream.recovered", {
         reason: recoveryReason,
         attempts: 2,
+        startupMs: Number(activeStartup.elapsedMs().toFixed(1)),
         firstByteMs: Number(upstream.firstByteMs.toFixed(1)),
       });
 
@@ -870,21 +1049,41 @@ async function handle(
     );
     headers.set(
       "Server-Timing",
-      `provider;dur=${upstream.firstByteMs.toFixed(1)};desc="first-byte"`,
+      `startup;dur=${activeStartup.elapsedMs().toFixed(1)};desc="route-ready", provider;dur=${upstream.firstByteMs.toFixed(1)};desc="first-byte"`,
     );
     if (request.method === "HEAD") {
       await upstream.cancel();
+      ensureStartupActive();
+      activeStartup.succeed();
       return new Response(null, { status: upstream.response.status, headers });
     }
+    ensureStartupActive();
+    activeStartup.succeed();
     return new Response(upstream.body, {
       status: upstream.response.status,
       headers,
     });
+    } finally {
+      activeStartup.dispose();
+    }
   } catch (error) {
     const known =
-      error instanceof AllDebridError
-        ? error
-        : new AllDebridError("Unexpected streaming error.");
+      startup?.clientAborted()
+        ? new AllDebridError(
+            "The playback request was canceled.",
+            "STREAM_REQUEST_ABORTED",
+            499,
+          )
+        : startup?.timedOut()
+          ? new AllDebridError(
+              "The media source is taking too long to respond.",
+              "STREAM_UPSTREAM_TIMEOUT",
+              504,
+              true,
+            )
+          : error instanceof AllDebridError
+            ? error
+            : new AllDebridError("Unexpected streaming error.");
     writeRequestLog(
       known.status >= 500 ? "error" : "warn",
       "debrid.stream.failed",
@@ -892,6 +1091,8 @@ async function handle(
       {
         code: known.code,
         status: known.status,
+        startupMs: startup ? Number(startup.elapsedMs().toFixed(1)) : undefined,
+        startupTimedOut: startup?.timedOut() ?? false,
         error: error instanceof Error ? error : new Error(String(error)),
       },
     );
