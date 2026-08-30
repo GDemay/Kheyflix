@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CircleAlert,
@@ -132,6 +132,9 @@ export default function DiscoveryPage({
   const [qualityFilter, setQualityFilter] = useState("all");
   const [audioFilter, setAudioFilter] = useState("all");
   const [subtitleFilter, setSubtitleFilter] = useState("all");
+  const searchAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => searchAbortRef.current?.abort(), []);
 
   const filterOptions = useMemo(() => ({
     seasons: [...new Set(results.map((result) => result.metadata.season).filter((value): value is number => Boolean(value)))].sort((a, b) => a - b),
@@ -179,6 +182,11 @@ export default function DiscoveryPage({
 
   const runSearch = useCallback(async (term: string) => {
     if (term.length < 2) return;
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const searchIsCurrent = () =>
+      searchAbortRef.current === controller && !controller.signal.aborted;
     const requestId = clientRequestId();
     setSearching(true);
     setSearchCompleted(false);
@@ -189,10 +197,11 @@ export default function DiscoveryPage({
       if (searchKind === "series" && requestedEpisode) parameters.set("episode", requestedEpisode);
       const response = await fetchWithTimeout(
         `/api/discovery/search?${parameters}`,
-        { headers: { "x-request-id": requestId } },
+        { headers: { "x-request-id": requestId }, signal: controller.signal },
         DISCOVERY_SEARCH_TIMEOUT_MS,
       );
       const data = await response.json() as ApiErrorPayload & { results?: Result[] };
+      if (!searchIsCurrent()) return;
       if (!response.ok) {
         const failure = apiFailure(response, data, "Search is unavailable.");
         reportApiFailure("discovery.search", failure);
@@ -211,6 +220,7 @@ export default function DiscoveryPage({
       setAudioFilter("all");
       setSubtitleFilter("all");
     } catch (reason) {
+      if (!searchIsCurrent()) return;
       const unexpected = reason instanceof ApiRequestError
         ? undefined
         : reportUnexpectedClientFailure("discovery.search", reason, requestId);
@@ -221,6 +231,8 @@ export default function DiscoveryPage({
           : reason instanceof Error ? reason.message : "Search is unavailable.";
       setError(unexpected ? `${message} Reference: ${requestId}.` : message);
     } finally {
+      if (!searchIsCurrent()) return;
+      searchAbortRef.current = null;
       setSearching(false);
     }
   }, [requestedEpisode, requestedSeason, searchKind]);
