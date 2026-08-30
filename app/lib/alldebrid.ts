@@ -16,13 +16,28 @@ type ApiEnvelope<T> = { status:'success'|'error'; data?:T; error?:{code:string;m
 type FileNode = { n:string; s?:number; l?:string; e?:FileNode[] };
 export type DebridVideoFile = { index:number; name:string; size:number; path:string };
 export type DebridMagnet = { id:number; filename:string; size:number; status:string; statusCode:number; downloaded?:number; downloadSpeed?:number; videoFiles:DebridVideoFile[] };
+type ResolvedVideo = { url:string; name:string; size:number };
+type ResolveVideoOptions = { signal?:AbortSignal };
+type ProviderRequestTracker = {
+  pending:Set<Promise<unknown>>;
+  onSettled:()=>void;
+};
+type StreamResolveJob = {
+  controller:AbortController;
+  waiters:Set<symbol>;
+  providerRequests:Set<Promise<unknown>>;
+  settled:boolean;
+  abandoned:boolean;
+  promise:Promise<ResolvedVideo>;
+};
 
 type CacheEntry<T> = { value:T; updatedAt:number };
 const shared = globalThis as typeof globalThis & {
   __kheyflixMagnetCache?:CacheEntry<DebridMagnet[]>;
   __kheyflixMagnetRequest?:Promise<DebridMagnet[]>;
-  __kheyflixStreamCache?:Map<string,CacheEntry<{url:string;name:string;size:number}>>;
-  __kheyflixStreamRequests?:Map<string,Promise<{url:string;name:string;size:number}>>;
+  __kheyflixStreamCache?:Map<string,CacheEntry<ResolvedVideo>>;
+  __kheyflixStreamRequests?:Map<string,StreamResolveJob>;
+  __kheyflixStreamActiveRequests?:Set<StreamResolveJob>;
   __kheyflixAllDebridHealth?:CacheEntry<boolean>;
   __kheyflixAllDebridHealthRequest?:Promise<boolean>;
 };
@@ -48,8 +63,91 @@ const apiKey = () => {
 const providerOperation = (path:string) =>
   path.replace(/^\/v4(?:\.1)?\//,'').replaceAll('/','.');
 
-const waitForRetry = (milliseconds:number) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
+const abortReason = (signal:AbortSignal) =>
+  signal.reason ?? new DOMException('The provider request was canceled.','AbortError');
+
+const throwIfAborted = (signal?:AbortSignal) => {
+  if (signal?.aborted) throw abortReason(signal);
+};
+
+const awaitAbortable = <T>(operation:Promise<T>,signal?:AbortSignal,onAbort?:()=>void) => {
+  if (!signal) return operation;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve,reject)=>{
+    let finished=false;
+    const cleanup=()=>signal.removeEventListener('abort',abort);
+    const settle=(callback:()=>void)=>{
+      if(finished)return;
+      finished=true;
+      cleanup();
+      callback();
+    };
+    const abort=()=>settle(()=>{
+      try { onAbort?.(); } catch { /* Cleanup is best-effort. */ }
+      reject(abortReason(signal));
+    });
+    signal.addEventListener('abort',abort,{once:true});
+    if(signal.aborted){abort();return;}
+    operation.then(
+      value=>settle(()=>{
+        if(signal.aborted)reject(abortReason(signal));
+        else resolve(value);
+      }),
+      error=>settle(()=>reject(error)),
+    );
+  });
+};
+
+const waitForRetry = (milliseconds:number,signal?:AbortSignal) => {
+  if(!signal)return new Promise<void>((resolve)=>setTimeout(resolve,milliseconds));
+  throwIfAborted(signal);
+  return new Promise<void>((resolve,reject)=>{
+    let finished=false;
+    const cleanup=()=>signal.removeEventListener('abort',abort);
+    const timer=setTimeout(()=>{
+      if(finished)return;
+      finished=true;
+      cleanup();
+      resolve();
+    },milliseconds);
+    const abort=()=>{
+      if(finished)return;
+      finished=true;
+      clearTimeout(timer);
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener('abort',abort,{once:true});
+    if(signal.aborted)abort();
+  });
+};
+
+const streamRequestAborted = () =>
+  new AllDebridError(
+    'The playback request was canceled.',
+    'STREAM_REQUEST_ABORTED',
+    499,
+  );
+
+const trackProviderOperation = <T>(
+  operation:Promise<T>,
+  tracker?:ProviderRequestTracker,
+) => {
+  if(!tracker)return operation;
+  const tracked=operation as Promise<unknown>;
+  tracker.pending.add(tracked);
+  void operation.then(
+    ()=>{
+      tracker.pending.delete(tracked);
+      tracker.onSettled();
+    },
+    ()=>{
+      tracker.pending.delete(tracked);
+      tracker.onSettled();
+    },
+  );
+  return operation;
+};
 
 const resolutionTimeout = () =>
   new AllDebridError(
@@ -64,6 +162,8 @@ async function request<T>(
   timeoutMs=API_TIMEOUT_MS,
   retryable=false,
   deadlineAt?:number,
+  signal?:AbortSignal,
+  tracker?:ProviderRequestTracker,
 ):Promise<T> {
   const body = new URLSearchParams();
   Object.entries(fields).forEach(([key,value]) => Array.isArray(value) ? value.forEach(item=>body.append(`${key}[]`,item)) : body.set(key,value));
@@ -71,6 +171,7 @@ async function request<T>(
   let lastError:unknown;
   const attempts = retryable ? 2 : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    throwIfAborted(signal);
     const elapsed = performance.now() - startedAt,
       remaining = Math.min(
         timeoutMs - elapsed,
@@ -81,8 +182,30 @@ async function request<T>(
       break;
     }
     try {
-      const response = await fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store', signal:AbortSignal.timeout(Math.max(1, Math.floor(Math.min(7_500, remaining)))) });
-      const envelope = await response.json() as ApiEnvelope<T>;
+      const timeoutSignal=AbortSignal.timeout(Math.max(1,Math.floor(Math.min(7_500,remaining))));
+      const attemptSignal=signal?AbortSignal.any([signal,timeoutSignal]):timeoutSignal;
+      const responseOperation=fetch(`${API_ROOT}${path}`, { method:'POST', headers:{ Authorization:`Bearer ${apiKey()}`, 'Content-Type':'application/x-www-form-urlencoded' }, body, cache:'no-store', signal:attemptSignal });
+      // A mocked or non-compliant fetch can ignore AbortSignal. Drain its late
+      // body rather than allowing it to keep a provider connection alive.
+      void responseOperation.then((response)=>{
+        if(!attemptSignal.aborted)return;
+        const cancellation=response.body?.cancel(abortReason(attemptSignal));
+        if(cancellation)trackProviderOperation(cancellation,tracker);
+      },()=>undefined);
+      trackProviderOperation(responseOperation,tracker);
+      const response = await awaitAbortable(responseOperation,attemptSignal);
+      const cancelResponseBody=()=>{
+        const cancellation=response.body?.cancel(abortReason(attemptSignal));
+        if(cancellation)trackProviderOperation(cancellation,tracker);
+      };
+      const envelopeOperation=response.json() as Promise<ApiEnvelope<T>>;
+      trackProviderOperation(envelopeOperation,tracker);
+      const envelope = await awaitAbortable(
+        envelopeOperation,
+        attemptSignal,
+        cancelResponseBody,
+      );
+      throwIfAborted(signal);
       if (deadlineAt !== undefined && Date.now() >= deadlineAt)
         throw resolutionTimeout();
       if (!response.ok || envelope.status !== 'success' || !envelope.data) {
@@ -101,6 +224,7 @@ async function request<T>(
       return envelope.data;
     } catch (error) {
       lastError = error;
+      if(signal?.aborted)throw abortReason(signal);
       if (deadlineAt !== undefined && Date.now() >= deadlineAt)
         throw resolutionTimeout();
       const elapsedAfterFailure = performance.now() - startedAt,
@@ -116,7 +240,7 @@ async function request<T>(
           remainingAfterFailure > 200 &&
           (!(error instanceof AllDebridError) || error.retryable);
       if (canRetry) {
-        await waitForRetry(Math.min(200 * (attempt + 1), remainingAfterFailure));
+        await waitForRetry(Math.min(200 * (attempt + 1), remainingAfterFailure),signal);
         continue;
       }
       const durationMs = Number((performance.now() - startedAt).toFixed(1));
@@ -174,8 +298,8 @@ const flattenFiles = (nodes:FileNode[], parent=''):Array<{name:string;size:numbe
 
 const isVideo = (name:string) => VIDEO_EXTENSIONS.has(name.split('.').pop()?.toLowerCase() || '');
 
-async function filesForMagnet(id:number, deadlineAt?:number) {
-  const data = await request<{magnets:Array<{id:string|number;files?:FileNode[];error?:{message:string}}>}>('/v4/magnet/files',{id:[String(id)]},API_TIMEOUT_MS,true,deadlineAt);
+async function filesForMagnet(id:number, deadlineAt?:number,signal?:AbortSignal,tracker?:ProviderRequestTracker) {
+  const data = await request<{magnets:Array<{id:string|number;files?:FileNode[];error?:{message:string}}>}>('/v4/magnet/files',{id:[String(id)]},API_TIMEOUT_MS,true,deadlineAt,signal,tracker);
   const magnet = data.magnets[0];
   if (!magnet || magnet.error) throw new AllDebridError(magnet?.error?.message || 'Magnet files are unavailable.','MAGNET_FILES_UNAVAILABLE',404);
   return flattenFiles(magnet.files || []).filter(file=>isVideo(file.name)).sort((a,b)=>b.size-a.size);
@@ -225,28 +349,115 @@ const pruneStreamCache = (now=Date.now()) => {
   while(cache.size>STREAM_CACHE_MAX)cache.delete(cache.keys().next().value as string);
 };
 
-export async function resolveVideo(id:number,index:number,clientIp?:string,refresh=false) {
+const abandonJob = (
+  key:string,
+  job:StreamResolveJob,
+  requests:Map<string,StreamResolveJob>,
+) => {
+  if(job.settled||job.abandoned||job.waiters.size)return;
+  job.abandoned=true;
+  if(requests.get(key)===job)requests.delete(key);
+  job.controller.abort();
+};
+
+const waitForResolveJob = (
+  key:string,
+  job:StreamResolveJob,
+  requests:Map<string,StreamResolveJob>,
+  signal?:AbortSignal,
+) => {
+  if(signal?.aborted)return Promise.reject(streamRequestAborted());
+  const waiter=Symbol(key);
+  job.waiters.add(waiter);
+  return new Promise<ResolvedVideo>((resolve,reject)=>{
+    let finished=false;
+    const release=()=>{
+      if(finished)return;
+      finished=true;
+      signal?.removeEventListener('abort',abort);
+      job.waiters.delete(waiter);
+      abandonJob(key,job,requests);
+    };
+    const abort=()=>{
+      if(finished)return;
+      release();
+      reject(streamRequestAborted());
+    };
+    if(signal)signal.addEventListener('abort',abort,{once:true});
+    if(signal?.aborted){abort();return;}
+    job.promise.then(
+      value=>{
+        if(signal?.aborted){abort();return;}
+        release();
+        resolve(value);
+      },
+      error=>{
+        if(signal?.aborted){abort();return;}
+        release();
+        reject(error);
+      },
+    );
+  });
+};
+
+export async function resolveVideo(
+  id:number,
+  index:number,
+  clientIp?:string,
+  refresh=false,
+  options:ResolveVideoOptions={},
+) {
   if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(index) || index < 0) throw new AllDebridError('Invalid media selection.','INVALID_MEDIA',400);
+  if(options.signal?.aborted)throw streamRequestAborted();
   const key=`${id}:${index}:${clientIp||'server'}`,now=Date.now();pruneStreamCache(now);
   const cache=shared.__kheyflixStreamCache??=new Map(),cached=cache.get(key);
   const requests=shared.__kheyflixStreamRequests??=new Map(),pending=requests.get(key);
-  if(pending)return pending;
+  if(pending)return waitForResolveJob(key,pending,requests,options.signal);
   if(refresh)cache.delete(key);
   if(!refresh&&cached&&now-cached.updatedAt<STREAM_FRESH_MS){cache.delete(key);cache.set(key,cached);return cached.value}
-  if(requests.size>=STREAM_REQUEST_MAX)throw new AllDebridError('The playback resolver is busy. Try again shortly.','STREAM_RESOLVER_BUSY',429);
+  const active=shared.__kheyflixStreamActiveRequests??=new Set();
+  if(active.size>=STREAM_REQUEST_MAX)throw new AllDebridError('The playback resolver is busy. Try again shortly.','STREAM_RESOLVER_BUSY',429);
   const deadlineAt=Date.now()+RESOLVE_TIMEOUT_MS;
+  const job:StreamResolveJob={
+    controller:new AbortController(),
+    waiters:new Set(),
+    providerRequests:new Set(),
+    settled:false,
+    abandoned:false,
+    promise:Promise.resolve(undefined as never),
+  };
+  const releaseCapacity=()=>{
+    if(job.settled&&job.providerRequests.size===0)active.delete(job);
+  };
+  const tracker:ProviderRequestTracker={
+    pending:job.providerRequests,
+    onSettled:releaseCapacity,
+  };
   const resolve=(async()=>{
-    const videos = await filesForMagnet(id,deadlineAt);
+    throwIfAborted(job.controller.signal);
+    const videos = await filesForMagnet(id,deadlineAt,job.controller.signal,tracker);
+    throwIfAborted(job.controller.signal);
     const selected = videos[index];
     if (!selected) throw new AllDebridError('Video file not found.','VIDEO_NOT_FOUND',404);
-    const unlocked = await request<{link?:string;filename?:string;filesize?:number;delayed?:number}>('/v4/link/unlock',{link:selected.link,...(clientIp?{ip:clientIp}:{})},API_TIMEOUT_MS,true,deadlineAt);
+    const unlocked = await request<{link?:string;filename?:string;filesize?:number;delayed?:number}>('/v4/link/unlock',{link:selected.link,...(clientIp?{ip:clientIp}:{})},API_TIMEOUT_MS,true,deadlineAt,job.controller.signal,tracker);
+    throwIfAborted(job.controller.signal);
     if (!unlocked.link) throw new AllDebridError(unlocked.delayed ? 'The stream is still being prepared. Try again shortly.' : 'The stream could not be unlocked.','STREAM_PREPARING',409);
     const value={url:unlocked.link,name:unlocked.filename||selected.name,size:unlocked.filesize||selected.size};
+    throwIfAborted(job.controller.signal);
     cache.set(key,{value,updatedAt:Date.now()});pruneStreamCache();return value;
   })().finally(()=>{
-    if(requests.get(key)===resolve)requests.delete(key);
+    job.settled=true;
+    releaseCapacity();
+    if(requests.get(key)===job)requests.delete(key);
   });
-  requests.set(key,resolve);return resolve;
+  job.promise=resolve;
+  requests.set(key,job);
+  active.add(job);
+  // The last viewer can leave before a provider implementation finishes
+  // honoring AbortSignal. Keep the job observable without emitting an
+  // unhandled-rejection warning while its cancellation settles.
+  void job.promise.catch(()=>undefined);
+  return waitForResolveJob(key,job,requests,options.signal);
 }
 
 export const contentTypeFor = (filename:string) => {
