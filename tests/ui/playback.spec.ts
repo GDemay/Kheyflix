@@ -11,6 +11,15 @@ const trackPlaybackPath =
 test("a real movie starts and keeps streaming", async ({ page }) => {
   test.setTimeout(90_000);
   let blockingPreflights = 0;
+  const playbackTelemetry: Array<Record<string, unknown>> = [];
+  await page.route("**/api/playback/telemetry", async (route) => {
+    try {
+      playbackTelemetry.push(
+        JSON.parse(route.request().postData() || "{}") as Record<string, unknown>,
+      );
+    } catch {}
+    await route.fulfill({ status: 204 });
+  });
   page.on("request", (request) => {
     if (request.method() === "HEAD" && request.url().includes("/api/debrid/stream/"))
       blockingPreflights += 1;
@@ -32,11 +41,6 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
       timeout: 30_000,
     })
     .toBeGreaterThanOrEqual(2);
-  await expect(page.locator("main.player-shell")).toHaveAttribute(
-    "data-playback-quality",
-    "bootstrap",
-  );
-  await expect(page.locator(".player-top span")).toContainText("Starting · 360p");
   await expect(page.getByRole("status")).toBeHidden({ timeout: 30_000 });
   await expect
     .poll(
@@ -49,6 +53,38 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   );
   console.info(`[playback] first decoded frame: ${firstFrameMs}ms`);
   expect(firstFrameMs).toBeLessThan(10_000);
+  await expect
+    .poll(
+      () => playbackTelemetry.find((telemetry) => telemetry.event === "first_frame"),
+      { timeout: 15_000 },
+    )
+    .toBeTruthy();
+  const firstFrameTelemetry = playbackTelemetry.find(
+    (telemetry) => telemetry.event === "first_frame",
+  )!;
+  const firstFrameIndex = playbackTelemetry.indexOf(firstFrameTelemetry);
+  // The live title can decode its direct source before the test samples the
+  // short bootstrap state. Assert the actual decoded-frame telemetry instead
+  // of a transient DOM label: both startup paths are intentional, while a
+  // fallback or an undeclared quality transition is not.
+  expect(firstFrameTelemetry).toMatchObject({ event: "first_frame", attempt: 1 });
+  expect(Number(firstFrameTelemetry.elapsedMs)).toBeLessThan(10_000);
+  expect(
+    playbackTelemetry
+      .slice(0, firstFrameIndex)
+      .some((telemetry) =>
+        ["failure", "startup_retry", "startup_timeout"].includes(
+          String(telemetry.event),
+        ),
+      ),
+  ).toBe(false);
+  expect([
+    { phase: "bootstrap", quality: "bootstrap" },
+    { phase: "standard", quality: "original" },
+  ]).toContainEqual({
+    phase: firstFrameTelemetry.phase,
+    quality: firstFrameTelemetry.quality,
+  });
   expect(blockingPreflights).toBe(0);
 
   const initial = await video.evaluate((element) => ({
