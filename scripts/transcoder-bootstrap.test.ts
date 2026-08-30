@@ -423,6 +423,56 @@ describe("bootstrap transcoder lifecycle", () => {
     15_000,
   );
 
+  test.skipIf(process.platform === "win32")(
+    "kills an owned descendant after its encoder leader exits but before inherited pipes close",
+    async () => {
+      const app = createServer((_request, response) => response.writeHead(200).end());
+      servers.push(app);
+      const appPort = await listen(app);
+      const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+      directories.push(directory);
+      const leaderExitedMarker = join(directory, "leader-exited");
+      const descendantMarker = join(directory, "leader-exited-descendant-survived");
+      const ffmpeg = await executable(
+        directory,
+        "ffmpeg",
+        `#!/usr/bin/env node\n${delayedInheritedPipeChild(descendantMarker, 350)}\nconst { writeFileSync } = require('node:fs'); process.stdout.write('stream-bytes'); setTimeout(() => { writeFileSync(${JSON.stringify(leaderExitedMarker)}, 'exited'); process.exit(0); }, 50);\n`,
+      );
+      const ffprobe = await executable(
+        directory,
+        "ffprobe",
+        "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+      );
+      const endpoint = await startTranscoder(
+        `http://127.0.0.1:${appPort}`,
+        ffmpeg,
+        ffprobe,
+      );
+
+      const response = await fetch(
+        `${endpoint}/transcode/42/0?token=leader-exited-bootstrap&quality=bootstrap`,
+      );
+      expect(response.status).toBe(200);
+      await response.body?.getReader().read();
+      await expect(waitForPath(leaderExitedMarker)).resolves.toBeDefined();
+      await wait(75);
+
+      const stopped = await fetch(`${endpoint}/stop/leader-exited-bootstrap`, {
+        method: "POST",
+      });
+      expect(stopped.status).toBe(204);
+      await wait(450);
+      await expect(stat(descendantMarker)).rejects.toThrow();
+      const health = await (await fetch(`${endpoint}/health`)).json();
+      expect(health.capacity).toMatchObject({
+        activeTranscodes: 0,
+        stopping: 0,
+        inUse: 0,
+      });
+    },
+    15_000,
+  );
+
   test("returns a retryable busy response when an escaped teardown exceeds the stop contract", async () => {
     const app = createServer((_request, response) => response.writeHead(200).end());
     servers.push(app);
@@ -467,6 +517,16 @@ describe("bootstrap transcoder lifecycle", () => {
     }
     expect(stopping.capacity.stopping).toBe(1);
 
+    const duplicateStop = fetch(`${endpoint}/stop/long-closing-bootstrap`, {
+      method: "POST",
+    });
+    await expect(
+      Promise.race([
+        duplicateStop.then(() => "completed"),
+        wait(150).then(() => "pending"),
+      ]),
+    ).resolves.toBe("pending");
+
     const requestedAt = Date.now();
     const replacement = await fetch(
       `${endpoint}/transcode/42/0?token=timed-out-bootstrap&quality=bootstrap`,
@@ -484,7 +544,11 @@ describe("bootstrap transcoder lifecycle", () => {
       stoppingTimeouts: 1,
     });
     await expect(waitForPath(closeMarker)).resolves.toBeDefined();
-    expect((await stop).status).toBe(204);
+    expect((await stop).status).toBe(202);
+    expect((await duplicateStop).status).toBe(202);
+    expect((await fetch(`${endpoint}/stop/long-closing-bootstrap`, {
+      method: "POST",
+    })).status).toBe(204);
 
     const admitted = await fetch(
       `${endpoint}/transcode/42/0?token=after-timeout-bootstrap&quality=bootstrap`,
@@ -697,6 +761,95 @@ describe("bootstrap transcoder lifecycle", () => {
     await activeReader?.cancel();
   }, 15_000);
 
+  test("admits a replacement when another capacity slot closes during a pending stop", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const closeMarker = join(directory, "escaped-transcode-close-finished"),
+      probePayload = JSON.stringify({
+        format: { duration: "120", format_name: "matroska" },
+        streams: [{ index: 2, codec_type: "subtitle", codec_name: "subrip" }],
+      });
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      [
+        "#!/usr/bin/env node",
+        "if (process.argv.includes('webvtt')) { process.stdout.write('WEBVTT\\n\\n00:00:00.000 --> 00:00:01.000\\ntext\\n\\n'); setTimeout(() => process.exit(0), 1400); } else {",
+        delayedInheritedPipeChild(closeMarker, 4_000, true),
+        "process.stdout.write('stream-bytes'); setInterval(() => {}, 1000);",
+        "}",
+      ].join("\n"),
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stdout.write(" +
+        JSON.stringify(probePayload) +
+        "); process.exit(0);",
+    );
+    const endpoint = await startTranscoder(
+      "http://127.0.0.1:" + appPort,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const subtitle = await fetch(endpoint + "/subtitle/42/0/2.vtt");
+    await subtitle.body?.getReader().read();
+    const subtitleDeadline = Date.now() + 1_000;
+    let subtitleActive = false;
+    while (Date.now() < subtitleDeadline) {
+      const health = await (await fetch(endpoint + "/health")).json();
+      if (health.capacity.activeSubtitles === 1) {
+        subtitleActive = true;
+        break;
+      }
+      await wait(25);
+    }
+    expect(subtitleActive).toBe(true);
+
+    const first = await fetch(
+      endpoint + "/transcode/42/0?token=closing-with-subtitle&quality=bootstrap",
+    );
+    const firstReader = first.body?.getReader();
+    await firstReader?.read();
+    const stop = fetch(endpoint + "/stop/closing-with-subtitle", { method: "POST" });
+    const stopDeadline = Date.now() + 1_000;
+    let stopping = false;
+    while (Date.now() < stopDeadline) {
+      const health = await (await fetch(endpoint + "/health")).json();
+      if (health.capacity.stopping === 1) {
+        stopping = true;
+        break;
+      }
+      await wait(25);
+    }
+    expect(stopping).toBe(true);
+
+    const requestedAt = Date.now();
+    const replacement = await fetch(
+      endpoint + "/transcode/42/0?token=subtitle-freed-replacement&quality=bootstrap",
+    );
+
+    expect(replacement.status).toBe(200);
+    expect(Date.now() - requestedAt).toBeLessThan(2_000);
+    const health = await (await fetch(endpoint + "/health")).json();
+    expect(health.capacity).toMatchObject({
+      activeSubtitles: 0,
+      activeTranscodes: 1,
+      inUse: 2,
+      stopping: 1,
+      stoppingWaits: 1,
+      stoppingTimeouts: 0,
+    });
+    await replacement.body?.getReader().cancel();
+    await firstReader?.cancel();
+    expect((await stop).status).toBe(202);
+    await expect(waitForPath(closeMarker)).resolves.toBeDefined();
+  }, 15_000);
+
   test("starts fixed-profile iPhone HLS without waiting for a media probe", async () => {
     const app = createServer((_request, response) => response.writeHead(200).end());
     servers.push(app);
@@ -740,6 +893,73 @@ describe("bootstrap transcoder lifecycle", () => {
       segmentsRequested: 1,
       segmentsDelivered: 1,
     });
+  }, 15_000);
+
+  test("does not retain a signal-terminated HLS encoder as a closing capacity slot", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const signalMarker = join(directory, "hls-self-signalled");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      [
+        "#!/usr/bin/env node",
+        "const { dirname, join } = require('node:path');",
+        "const { mkdirSync, writeFileSync } = require('node:fs');",
+        "if (process.argv.includes('hls')) {",
+        "  const output = process.argv.at(-1);",
+        "  mkdirSync(dirname(output), { recursive: true });",
+        "  writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n');",
+        "  writeFileSync(join(dirname(output), 'segment00000.ts'), 'segment');",
+        "  setTimeout(() => { writeFileSync(" +
+          JSON.stringify(signalMarker) +
+          ", 'sent'); process.kill(process.pid, 'SIGKILL'); }, 350);",
+        "} else {",
+        "  process.stdout.write('stream-bytes');",
+        "  setInterval(() => {}, 1000);",
+        "}",
+      ].join("\n"),
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const playlist = await fetch(
+      `${endpoint}/hls/42/0/signalled-bootstrap/master.m3u8?quality=bootstrap`,
+    );
+    expect(playlist.status).toBe(200);
+    await expect(playlist.text()).resolves.toContain("#EXTM3U");
+    await expect(waitForPath(signalMarker)).resolves.toBeDefined();
+    await wait(150);
+
+    const afterSignal = await (await fetch(`${endpoint}/health`)).json();
+    expect(afterSignal.capacity).toMatchObject({
+      activeHls: 0,
+      stopping: 0,
+      inUse: 0,
+    });
+
+    const stoppedAt = Date.now();
+    const stopped = await fetch(`${endpoint}/stop/signalled-bootstrap`, {
+      method: "POST",
+    });
+    expect(stopped.status).toBe(204);
+    expect(Date.now() - stoppedAt).toBeLessThan(1_000);
+    const replacement = await fetch(
+      `${endpoint}/transcode/42/0?token=signal-replacement&quality=bootstrap`,
+    );
+    expect(replacement.status).toBe(200);
+    await replacement.body?.getReader().cancel();
   }, 15_000);
 
   test("serves a complete bounded native-VOD chunk for a nonzero Safari resume", async () => {

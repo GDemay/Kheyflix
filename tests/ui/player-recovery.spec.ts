@@ -1038,6 +1038,69 @@ test("next episode waits for release and cannot override a later Back action", a
   expect(nextSourceStarted).toBe(false);
 });
 
+test("Next episode remains retryable when its first release cannot confirm closure", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  await isolateSyntheticMediaError(page);
+  await page.addInitScript(() => {
+    sessionStorage.setItem(
+      "kheyflix:playback-queue:v1",
+      JSON.stringify([
+        {
+          titleId: "series-42",
+          seriesId: "series-42",
+          seriesTitle: "A Real Series",
+          magnetId: 42,
+          file: 0,
+          season: 1,
+          episode: 1,
+          label: "Episode 1",
+        },
+        {
+          titleId: "series-42",
+          seriesId: "series-42",
+          seriesTitle: "A Real Series",
+          magnetId: 43,
+          file: 1,
+          season: 1,
+          episode: 2,
+          label: "Episode 2",
+        },
+      ]),
+    );
+  });
+  await page.route("**/api/debrid/media/**", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  let releases = 0;
+  await page.route("**/api/debrid/transcode/42/0**", async (route) => {
+    if (route.request().method() === "POST") releases += 1;
+    await route.fulfill({ status: releases === 1 ? 503 : 204 });
+  });
+  await page.route("**/api/debrid/transcode/43/1**", async (route) =>
+    route.fulfill({ status: 204 }),
+  );
+
+  await page.goto("/stream/42/0/a-retryable-next-episode?compat=1", {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(
+    page.locator("video"),
+  ).toHaveAttribute("src", /\/api\/debrid\/transcode\/42\/0/);
+
+  await page.getByRole("button", { name: "Next episode" }).click();
+  await expect(page.getByRole("alert")).toContainText("still closing");
+  expect(releases).toBe(1);
+
+  await page.getByRole("button", { name: "Next episode" }).click();
+  await expect(page).toHaveURL(/\/stream\/43\/1\//);
+  expect(releases).toBe(2);
+});
+
 test("a later player choice is coalesced while the active session releases", async ({
   page,
 }) => {
@@ -1158,6 +1221,88 @@ test("seek, audio, and quality changes wait for the active transcoder session to
       .getByRole("button", { name: "720p HD" })
       .evaluate((button: HTMLButtonElement) => button.click());
   });
+});
+
+test("a closing stop response keeps the replacement source gated until closure confirms", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  await isolateSyntheticMediaError(page);
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  let oldSession = "",
+    stopRequests = 0,
+    nextSourceStarted = false;
+  const firstStop = deferred(),
+    secondStop = deferred();
+  await page.route("**/api/debrid/transcode/42/0**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET") {
+      if (
+        oldSession &&
+        url.searchParams.get("session") !== oldSession
+      )
+        nextSourceStarted = true;
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (
+      request.method() === "POST" &&
+      url.searchParams.get("session") === oldSession
+    ) {
+      stopRequests += 1;
+      if (stopRequests === 1) {
+        firstStop.resolve();
+        await route.fulfill({
+          status: 202,
+          headers: { "Retry-After": "1" },
+          contentType: "application/json",
+          body: JSON.stringify({ status: "stopping" }),
+        });
+        return;
+      }
+      secondStop.resolve();
+    }
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/closing-stop-gate?compat=1", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/transcode\/42\/0/);
+  const before = await video.getAttribute("src");
+  expect(before).toBeTruthy();
+  oldSession = sourceSession(before!);
+  expect(oldSession).toBeTruthy();
+  const replacementRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname === "/api/debrid/transcode/42/0" &&
+      url.searchParams.get("session") !== oldSession
+    );
+  });
+
+  await page
+    .getByRole("button", { name: "Playback settings" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await page
+    .getByRole("dialog", { name: "Playback settings" })
+    .getByRole("button", { name: "720p HD" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await firstStop.promise;
+  await page.waitForTimeout(250);
+  expect(stopRequests).toBe(1);
+  expect(nextSourceStarted).toBe(false);
+  await secondStop.promise;
+  await replacementRequest;
+  await expect.poll(() => video.getAttribute("src")).not.toBe(before);
 });
 
 test("automatic desktop quality promotion waits for a decoded bootstrap frame and its release", async ({
