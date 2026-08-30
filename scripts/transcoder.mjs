@@ -44,6 +44,7 @@ const jobs = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
   playbackStartupGates = new Map(),
+  progressiveStartupStates = new Map(),
   subtitleJobs = new Set();
 let capacityRejected = 0,
   capacityReclaimed = 0,
@@ -284,13 +285,17 @@ const reclaimPlaybackCapacity = async () => {
   }
   return true;
 };
-const reservePlaybackCapacity = (token, isCancelled = () => false) =>
+const reservePlaybackCapacity = (
+  token,
+  fingerprint,
+  isCancelled = () => false,
+) =>
   withCapacityAdmission(async () => {
     if (isCancelled()) return undefined;
-    if (pendingJobs.has(token)) {
-      capacityRejected += 1;
-      return undefined;
-    }
+    // A second request for the same token is not extra playback demand. The
+    // route joins this reservation after admission instead of consuming a
+    // second slot or reporting a misleading capacity failure.
+    if (pendingJobs.has(token)) return undefined;
     if (!(await reclaimPlaybackCapacity())) {
       capacityRejected += 1;
       return undefined;
@@ -299,6 +304,7 @@ const reservePlaybackCapacity = (token, isCancelled = () => false) =>
     let resolve;
     const reservation = {
       cancelled: false,
+      fingerprint,
       settled: new Promise((complete) => {
         resolve = complete;
       }),
@@ -307,6 +313,13 @@ const reservePlaybackCapacity = (token, isCancelled = () => false) =>
     pendingJobs.set(token, reservation);
     return reservation;
   });
+const waitForPendingPlaybackReservation = async (token, fingerprint) => {
+  const reservation = pendingJobs.get(token);
+  if (!reservation) return "none";
+  if (reservation.fingerprint !== fingerprint) return "conflict";
+  await reservation.settled;
+  return "settled";
+};
 const reservationIsCurrent = (token, reservation) =>
   Boolean(reservation) &&
   pendingJobs.get(token) === reservation &&
@@ -341,6 +354,25 @@ const nonNegativeNumber = (value) => {
 };
 const inputFor = (id, file) => remoteMediaInput(appOrigin, id, file);
 const mediaKey = (id, file) => `${id}:${file}`;
+const HLS_PLAYBACK_FIELDS = ["start", "audio", "sync", "quality", "mode"];
+const playbackFingerprint = (kind, id, file, url, fields) =>
+  JSON.stringify([
+    kind,
+    id,
+    file,
+    ...fields.map((field) => [field, url.searchParams.get(field) || ""]),
+  ]);
+const hlsAssetOptionsMatch = (job, url) =>
+  !job.requestOptions ||
+  HLS_PLAYBACK_FIELDS.every(
+    (field) =>
+      !url.searchParams.has(field) ||
+      job.requestOptions[field] === (url.searchParams.get(field) || ""),
+  );
+const conflictingPlaybackSession = (response) =>
+  json(response, 409, {
+    error: "This playback session is already starting different media.",
+  });
 const wait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const spawnPlaybackEncoder = (args, stdio) =>
@@ -396,6 +428,85 @@ const internalInputHeaders = () => {
   const token = process.env.KHEYFLIX_INTERNAL_TRANSCODER_TOKEN?.trim();
   const headers = [...(token ? [`X-Kheyflix-Internal: ${token}`] : [])];
   return headers.length ? ["-headers", `${headers.join("\r\n")}\r\n`] : [];
+};
+const streamProgressiveResponse = (child, response, quality, startup) => {
+  let started = false,
+    detached = false;
+  const subscriber = { paused: false };
+  startup.subscribers ||= new Set();
+  startup.subscribers.add(subscriber);
+  const hasBackpressuredSubscriber = () =>
+    Array.from(startup.subscribers).some((item) => item.paused);
+  const resumeWhenUnblocked = () => {
+    if (!hasBackpressuredSubscriber() && !playbackChildClosed(child))
+      child.stdout.resume();
+  };
+  const detach = () => {
+    if (detached) return;
+    detached = true;
+    child.stdout.off("data", onData);
+    child.stdout.off("end", onEnd);
+    child.off("error", onError);
+    child.off("close", onClose);
+    response.off("drain", onDrain);
+    response.off("close", onResponseClose);
+    startup.subscribers.delete(subscriber);
+    if (subscriber.paused) {
+      subscriber.paused = false;
+      resumeWhenUnblocked();
+    }
+  };
+  const onData = (chunk) => {
+    if (!started) {
+      started = true;
+      if (!startup.started) {
+        startup.started = true;
+        startup.onStarted?.();
+      }
+      response.writeHead(200, {
+        "Content-Type": "video/mp4",
+        "Cache-Control": "private, no-store",
+        "X-Kheyflix-Audio": "aac",
+        "X-Kheyflix-Quality": quality,
+      });
+    }
+    if (!response.write(chunk)) {
+      subscriber.paused = true;
+      child.stdout.pause();
+    }
+  };
+  const onDrain = () => {
+    subscriber.paused = false;
+    resumeWhenUnblocked();
+  };
+  const onEnd = () => response.end();
+  const onError = () => {
+    if (!response.headersSent)
+      json(response, 503, {
+        error: "The compatible stream could not start.",
+      });
+    else response.end();
+    detach();
+  };
+  const onClose = (code) => {
+    if (!started && !response.writableEnded && !response.destroyed)
+      json(response, code === null ? 504 : 502, {
+        error: startup.stderrObserved
+          ? "The compatible stream could not start."
+          : "The compatible stream ended before it could start.",
+      });
+    detach();
+  };
+  const onResponseClose = () => {
+    detach();
+    startup.onSubscriberClosed?.();
+  };
+  child.stdout.on("data", onData);
+  child.stdout.on("end", onEnd);
+  child.on("error", onError);
+  child.on("close", onClose);
+  response.on("drain", onDrain);
+  response.once("close", onResponseClose);
 };
 const stopChild = (child) => {
   const existing = stoppingJobCompletions.get(child);
@@ -737,6 +848,19 @@ const server = http.createServer(async (request, response) => {
     );
     if (hls) {
       const [, id, file, token, asset] = hls;
+      const requestOptions = Object.fromEntries(
+        HLS_PLAYBACK_FIELDS.map((field) => [
+          field,
+          url.searchParams.get(field) || "",
+        ]),
+      );
+      const fingerprint = playbackFingerprint(
+        "hls",
+        id,
+        file,
+        url,
+        HLS_PLAYBACK_FIELDS,
+      );
       hlsMetrics.requests += 1;
       if (asset === "master.m3u8") hlsMetrics.mastersRequested += 1;
       else hlsMetrics.segmentsRequested += 1;
@@ -747,6 +871,16 @@ const server = http.createServer(async (request, response) => {
         reservation,
         startupGate;
       const startupKey = mediaKey(id, file);
+      const detachHlsStartupSubscriber = () => {
+        if (!job?.startupSubscribers) return;
+        job.startupSubscribers.delete(response);
+        if (
+          !job.startupReady &&
+          job.startupSubscribers.size === 0 &&
+          hlsJobs.get(token) === job
+        )
+          void stopJob(token, true);
+      };
       const isStartupCancelled = () => {
         if (startupAborted || requestClosed(request, response)) return true;
         if (startupCancelled) return true;
@@ -756,13 +890,27 @@ const server = http.createServer(async (request, response) => {
       const abortStartup = () => {
         if (!startupAborted) hlsMetrics.startupAborted += 1;
         startupAborted = true;
+        // A duplicate master request can be waiting on the original
+        // reservation. It may leave without cancelling that owner's startup.
+        if (reservation) cancelPlaybackReservation(token);
+        if (job?.startupSubscribers) {
+          detachHlsStartupSubscriber();
+          // The encoder remains the owner of the media startup gate while a
+          // compatible master request is still waiting. Releasing it when
+          // only this request disconnects lets ffprobe compete with the
+          // follower's cold HLS input before its first usable playlist.
+          return;
+        }
         settlePlaybackStartup(startupKey, startupGate);
-        cancelPlaybackReservation(token);
         if (created && job && hlsJobs.get(token) === job)
           void stopJob(token, true);
       };
       const abortOnResponseClose = () => {
-        if (!response.writableEnded) abortStartup();
+        if (!response.writableEnded) {
+          abortStartup();
+          return;
+        }
+        job?.startupSubscribers?.delete(response);
       };
       request.once("aborted", abortStartup);
       response.once("close", abortOnResponseClose);
@@ -774,18 +922,33 @@ const server = http.createServer(async (request, response) => {
             abandonedStartups += 1;
             return;
           }
-          reservation = await reservePlaybackCapacity(
-            token,
-            isStartupCancelled,
-          );
-          if (!reservation) {
+          for (let attempt = 0; attempt < 3 && !reservation && !job; attempt += 1) {
+            reservation = await reservePlaybackCapacity(
+              token,
+              fingerprint,
+              isStartupCancelled,
+            );
+            if (reservation) break;
+            // The first master request may still be creating this exact HLS
+            // session. Wait for that single flight before treating capacity as
+            // exhausted; a duplicate player fetch must not cost another slot.
+            const pending = await waitForPendingPlaybackReservation(
+              token,
+              fingerprint,
+            );
+            if (pending === "conflict") return conflictingPlaybackSession(response);
+            if (pending === "none") break;
+            job = hlsJobs.get(token);
+          }
+          if (!reservation && !job) {
             if (isStartupCancelled()) {
               abandonedStartups += 1;
               return;
             }
             return playbackBusy(response);
           }
-          try {
+          if (reservation) {
+            try {
           if (
             isStartupCancelled() ||
             !reservationIsCurrent(token, reservation)
@@ -907,6 +1070,12 @@ const server = http.createServer(async (request, response) => {
             playlistSegments,
             start,
             segmentExtension,
+            fingerprint,
+            requestOptions,
+            sourceKey: startupKey,
+            startupGate,
+            startupReady: false,
+            startupSubscribers: new Set([response]),
           };
           created = true;
           hlsJobs.set(token, job);
@@ -917,7 +1086,7 @@ const server = http.createServer(async (request, response) => {
             if (chunk.length) job.stderrObserved = true;
           });
           child.once("close", (code, signal) => {
-            settlePlaybackStartup(startupKey, startupGate);
+            settlePlaybackStartup(startupKey, job.startupGate);
             if (code !== 0) hlsMetrics.encoderExited += 1;
             if (code === 0 && job.nativeVod)
               hlsMetrics.nativeVodChunksCompleted += 1;
@@ -935,15 +1104,29 @@ const server = http.createServer(async (request, response) => {
               void rm(job.directory, { recursive: true, force: true });
             }
           });
-          } finally {
-            releasePlaybackReservation(token, reservation);
+            } finally {
+              releasePlaybackReservation(token, reservation);
+            }
           }
         }
+        if (job.sourceKey && job.sourceKey !== startupKey)
+          return conflictingPlaybackSession(response);
+        if (
+          asset === "master.m3u8"
+            ? job.fingerprint && job.fingerprint !== fingerprint
+            : !hlsAssetOptionsMatch(job, url)
+        )
+          return conflictingPlaybackSession(response);
+        // The first request can disconnect after creating the HLS job. A
+        // joined master must inherit its gate so it can release deferred
+        // metadata once the common playlist is actually usable.
+        if (job.startupGate) startupGate = job.startupGate;
         if (isStartupCancelled()) {
-          if (created && job && hlsJobs.get(token) === job)
-            await stopJob(token, true);
+          detachHlsStartupSubscriber();
           return;
         }
+        if (asset === "master.m3u8" && !job.startupReady)
+          job.startupSubscribers.add(response);
       jobTouched.set(token, Date.now());
       const path = join(job.directory, asset);
       if (asset === "master.m3u8") {
@@ -961,7 +1144,8 @@ const server = http.createServer(async (request, response) => {
         // A playable HLS window is the first point at which native HLS can
         // begin decoding. Release metadata work immediately afterwards rather
         // than holding it until a later segment request.
-        settlePlaybackStartup(startupKey, startupGate);
+        settlePlaybackStartup(startupKey, job.startupGate || startupGate);
+        job.startupReady = true;
       }
       await waitForFile(
         path,
@@ -1042,6 +1226,7 @@ const server = http.createServer(async (request, response) => {
       response.once("close", abortOnResponseClose);
       const reservation = await reservePlaybackCapacity(
         reservationToken,
+        null,
         isStartupCancelled,
       );
       if (!reservation) {
@@ -1124,7 +1309,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     const token = url.searchParams.get("token") || crypto.randomUUID();
+    const fingerprint = playbackFingerprint("transcode", match[1], match[2], url, [
+      "start",
+      "audio",
+      "sync",
+      "subtitle",
+      "video",
+      "quality",
+    ]);
     let child,
+      reservation,
+      createdChild = false,
       startupAborted = false,
       startupCancelled = false;
     const isStartupCancelled = () => {
@@ -1135,8 +1330,12 @@ const server = http.createServer(async (request, response) => {
     };
     const abortStartup = () => {
       startupAborted = true;
-      cancelPlaybackReservation(token);
-      if (child && jobs.get(token) === child) void stopJob(token, true);
+      // A joining request never owns the reservation or encoder. Its
+      // disconnect must not tear down the original client's single flight.
+      if (reservation) cancelPlaybackReservation(token);
+      if (child && progressiveStartupStates.get(token)?.child === child) return;
+      if (createdChild && child && jobs.get(token) === child)
+        void stopJob(token, true);
     };
     const abortOnResponseClose = () => {
       if (!response.writableEnded) abortStartup();
@@ -1144,11 +1343,65 @@ const server = http.createServer(async (request, response) => {
     request.once("aborted", abortStartup);
     response.once("close", abortOnResponseClose);
     const existing = jobs.get(token);
-    if (existing) await waitForStoppedJob(token);
-    const reservation = await reservePlaybackCapacity(
-      token,
-      isStartupCancelled,
-    );
+    if (existing) {
+      const existingStartup = progressiveStartupStates.get(token);
+      if (existingStartup && existingStartup.fingerprint !== fingerprint) {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+        return conflictingPlaybackSession(response);
+      }
+      // The token already owns an encoder, but no bytes have reached either
+      // client yet. This is the same startup flight, not a replacement.
+      if (existingStartup && !existingStartup.started) {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+        streamProgressiveResponse(
+          existing,
+          response,
+          existingStartup.quality,
+          existingStartup,
+        );
+        return;
+      }
+      await waitForStoppedJob(token);
+    }
+    for (let attempt = 0; attempt < 3 && !reservation; attempt += 1) {
+      reservation = await reservePlaybackCapacity(
+        token,
+        fingerprint,
+        isStartupCancelled,
+      );
+      if (reservation) break;
+      // A repeated media request can arrive while the first response is
+      // waiting on ffprobe or a delayed encoder. Join it before first output
+      // rather than rejecting the same token as a second capacity consumer.
+      const pending = await waitForPendingPlaybackReservation(token, fingerprint);
+      if (pending === "conflict") {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+        return conflictingPlaybackSession(response);
+      }
+      if (pending === "none") break;
+      const joiningChild = jobs.get(token),
+        joiningStartup = progressiveStartupStates.get(token);
+      if (
+        joiningChild &&
+        joiningStartup &&
+        !joiningStartup.started &&
+        joiningStartup.fingerprint === fingerprint &&
+        !isStartupCancelled()
+      ) {
+        request.off("aborted", abortStartup);
+        response.off("close", abortOnResponseClose);
+        streamProgressiveResponse(
+          joiningChild,
+          response,
+          joiningStartup.quality,
+          joiningStartup,
+        );
+        return;
+      }
+    }
     if (!reservation) {
       request.off("aborted", abortStartup);
       response.off("close", abortOnResponseClose);
@@ -1239,56 +1492,48 @@ const server = http.createServer(async (request, response) => {
         "pipe:1",
       );
       child = spawnPlaybackEncoder(args, ["ignore", "pipe", "pipe"]);
+      createdChild = true;
+      const progressiveStartup = {
+        started: false,
+        stderrObserved: false,
+        quality,
+        fingerprint,
+        child,
+        subscribers: new Set(),
+      };
       jobs.set(token, child);
+      progressiveStartupStates.set(token, progressiveStartup);
       releasePlaybackReservation(token, reservation);
       if (quality === "bootstrap") bootstrapJobs.add(token);
       jobTouched.set(token, Date.now());
-      let started = false,
-        stderrObserved = false;
       const startup = setTimeout(() => {
-        if (!started) terminatePlaybackEncoder(child);
+        if (!progressiveStartup.started) terminatePlaybackEncoder(child);
       }, 30000);
-      child.stdout.on("data", (chunk) => {
-        if (!started) {
-          started = true;
-          settlePlaybackStartup(startupKey, startupGate);
-          clearTimeout(startup);
-          response.writeHead(200, {
-            "Content-Type": "video/mp4",
-            "Cache-Control": "private, no-store",
-            "X-Kheyflix-Audio": "aac",
-            "X-Kheyflix-Quality": quality,
-          });
-        }
-        if (!response.write(chunk)) child.stdout.pause();
-      });
-      response.on("drain", () => child.stdout.resume());
-      child.stdout.on("end", () => response.end());
+      progressiveStartup.onStarted = () => {
+        settlePlaybackStartup(startupKey, startupGate);
+        clearTimeout(startup);
+      };
+      progressiveStartup.onSubscriberClosed = () => {
+        if (
+          !progressiveStartup.started &&
+          progressiveStartup.subscribers.size === 0 &&
+          jobs.get(token) === child
+        )
+          void stopJob(token, true);
+      };
+      streamProgressiveResponse(child, response, quality, progressiveStartup);
       child.stderr.on("data", (chunk) => {
-        if (chunk.length) stderrObserved = true;
+        if (chunk.length) progressiveStartup.stderrObserved = true;
       });
-      child.on("error", () => {
+      child.on("close", () => {
         settlePlaybackStartup(startupKey, startupGate);
         clearTimeout(startup);
-        if (!response.headersSent)
-          json(response, 503, {
-            error: "The compatible stream could not start.",
-          });
-        else response.end();
-      });
-      child.on("close", (code) => {
-        settlePlaybackStartup(startupKey, startupGate);
-        clearTimeout(startup);
+        if (progressiveStartupStates.get(token) === progressiveStartup)
+          progressiveStartupStates.delete(token);
         if (jobs.get(token) !== child) return;
         jobs.delete(token);
         bootstrapJobs.delete(token);
         jobTouched.delete(token);
-        if (!started && !response.writableEnded)
-          json(response, code === null ? 504 : 502, {
-            error: stderrObserved
-              ? "The compatible stream could not start."
-              : "The compatible stream ended before it could start.",
-          });
       });
     } catch (error) {
       settlePlaybackStartup(mediaKey(match[1], match[2]), startupGate);

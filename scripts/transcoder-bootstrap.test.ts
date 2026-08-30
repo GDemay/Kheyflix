@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, get, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,21 @@ const listen = (server: Server) =>
     server.listen(0, "127.0.0.1", () =>
       resolve((server.address() as { port: number }).port),
     );
+  });
+
+const pausedResponse = (url: string) =>
+  new Promise<IncomingMessage>((resolve, reject) => {
+    const request = get(url, (response) => {
+      response.pause();
+      resolve(response);
+    });
+    request.once("error", reject);
+  });
+
+const getResponse = (url: string) =>
+  new Promise<IncomingMessage>((resolve, reject) => {
+    const request = get(url, { agent: false }, resolve);
+    request.once("error", reject);
   });
 
 const unusedPort = async () => {
@@ -239,6 +254,604 @@ describe("bootstrap transcoder lifecycle", () => {
     const health = await (await fetch(`${endpoint}/health`)).json();
 
     expect(health.jobs).toBe(1);
+  }, 15_000);
+
+  test("single-flights simultaneous progressive startup requests for one token", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "progressive-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs'); appendFileSync(${JSON.stringify(launches)}, '1'); setTimeout(() => { process.stdout.write('stream-bytes'); }, 350); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/transcode/42/0?token=single-flight-progressive&quality=bootstrap`;
+
+    const [first, follower] = await Promise.all([fetch(source), fetch(source)]);
+
+    expect(first.status).toBe(200);
+    expect(follower.status).toBe(200);
+    const [firstChunk, followerChunk] = await Promise.all([
+      first.body?.getReader().read(),
+      follower.body?.getReader().read(),
+    ]);
+    expect(new TextDecoder().decode(firstChunk?.value)).toContain("stream-bytes");
+    expect(new TextDecoder().decode(followerChunk?.value)).toContain("stream-bytes");
+    expect(await readFile(launches, "utf8")).toBe("1");
+    const duringStartup = await (await fetch(`${endpoint}/health`)).json();
+    expect(duringStartup.capacity).toMatchObject({
+      activeTranscodes: 1,
+      pending: 0,
+      rejected: 0,
+    });
+
+    expect(
+      (await fetch(`${endpoint}/stop/single-flight-progressive`, { method: "POST" })).status,
+    ).toBe(204);
+    const released = await (await fetch(`${endpoint}/health`)).json();
+    expect(released.capacity).toMatchObject({
+      activeTranscodes: 0,
+      pending: 0,
+      stopping: 0,
+    });
+  }, 15_000);
+
+  test("single-flights simultaneous HLS master requests for one token", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "hls-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync, mkdirSync, writeFileSync } = require('node:fs'); const { dirname, join } = require('node:path'); appendFileSync(${JSON.stringify(launches)}, '1'); const output = process.argv.at(-1); setTimeout(() => { mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n'); writeFileSync(join(dirname(output), 'segment00000.ts'), 'segment'); }, 350); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/hls/42/0/single-flight-hls/master.m3u8?quality=bootstrap`;
+
+    const [first, follower] = await Promise.all([fetch(source), fetch(source)]);
+
+    expect(first.status).toBe(200);
+    expect(follower.status).toBe(200);
+    await expect(first.text()).resolves.toContain("#EXTM3U");
+    await expect(follower.text()).resolves.toContain("#EXTM3U");
+    expect(await readFile(launches, "utf8")).toBe("1");
+    const duringStartup = await (await fetch(`${endpoint}/health`)).json();
+    expect(duringStartup.capacity).toMatchObject({
+      activeHls: 1,
+      pending: 0,
+      rejected: 0,
+    });
+
+    expect(
+      (await fetch(`${endpoint}/stop/single-flight-hls`, { method: "POST" })).status,
+    ).toBe(204);
+    const released = await (await fetch(`${endpoint}/health`)).json();
+    expect(released.capacity).toMatchObject({
+      activeHls: 0,
+      pending: 0,
+      stopping: 0,
+    });
+  }, 15_000);
+
+  test("keeps a joined progressive startup alive when its creator disconnects", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "progressive-creator-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs'); appendFileSync(${JSON.stringify(launches)}, '1'); setTimeout(() => { process.stdout.write('first-bytes'); setTimeout(() => process.stdout.write('second-bytes'), 250); }, 700); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/transcode/42/0?token=progressive-creator-abort&quality=bootstrap`;
+    const creatorController = new AbortController();
+    const creator = fetch(source, { signal: creatorController.signal }).catch(() => undefined);
+    await waitForPath(launches);
+    const follower = fetch(source);
+    await wait(100);
+    creatorController.abort();
+    await creator;
+
+    const followerResponse = await follower;
+    expect(followerResponse.status).toBe(200);
+    const reader = followerResponse.body?.getReader();
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toContain("first-bytes");
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toContain("second-bytes");
+    expect(await readFile(launches, "utf8")).toBe("1");
+    await reader?.cancel();
+  }, 15_000);
+
+  test("keeps a joined HLS startup alive when its creator disconnects", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "hls-creator-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync, mkdirSync, writeFileSync } = require('node:fs'); const { dirname, join } = require('node:path'); appendFileSync(${JSON.stringify(launches)}, '1'); const output = process.argv.at(-1); setTimeout(() => { mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n'); writeFileSync(join(dirname(output), 'segment00000.ts'), 'segment'); }, 700); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/hls/42/0/hls-creator-abort/master.m3u8?quality=bootstrap`;
+    const creatorController = new AbortController();
+    const creator = fetch(source, { signal: creatorController.signal }).catch(() => undefined);
+    await waitForPath(launches);
+    const follower = fetch(source);
+    await wait(100);
+    creatorController.abort();
+    await creator;
+
+    const followerResponse = await follower;
+    expect(followerResponse.status).toBe(200);
+    await expect(followerResponse.text()).resolves.toContain("#EXTM3U");
+    expect(await readFile(launches, "utf8")).toBe("1");
+  }, 15_000);
+
+  test("keeps metadata deferred while a joined HLS startup outlives its creator", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "hls-creator-metadata-launches");
+    const probeStarted = join(directory, "probe-started");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node
+const { appendFileSync, mkdirSync, writeFileSync } = require('node:fs');
+const { dirname, join } = require('node:path');
+appendFileSync(${JSON.stringify(launches)}, '1');
+const output = process.argv.at(-1);
+setTimeout(() => {
+  mkdirSync(dirname(output), { recursive: true });
+  let playlist = '#EXTM3U\\n#EXT-X-TARGETDURATION:2\\n';
+  for (let index = 0; index < 6; index += 1) {
+    const suffix = String(index).padStart(5, '0');
+    playlist += '#EXT-X-PROGRAM-DATE-TIME:2026-08-30T00:00:00.000Z\\n#EXTINF:1.5,\\nsegment' + suffix + '.ts\\n';
+    writeFileSync(join(dirname(output), 'segment' + suffix + '.ts'), 'segment');
+  }
+  writeFileSync(output, playlist);
+}, 1_500);
+setInterval(() => {}, 1_000);
+`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(probeStarted)}, 'started');
+process.stdout.write(JSON.stringify({ format: { duration: '120', format_name: 'matroska' }, streams: [] }));
+`,
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/hls/42/0/hls-creator-metadata/master.m3u8?quality=480`;
+    const creator = get(source, { agent: false });
+    creator.once("error", () => undefined);
+    await waitForPath(launches);
+    const follower = getResponse(source);
+    const joinDeadline = Date.now() + 1_000;
+    let joined = false;
+    while (Date.now() < joinDeadline) {
+      const health = await (await fetch(`${endpoint}/health`)).json();
+      if (health.hls.mastersRequested >= 2) {
+        joined = true;
+        break;
+      }
+      await wait(25);
+    }
+    expect(joined).toBe(true);
+
+    const creatorClosed = new Promise<void>((resolve) => {
+      creator.once("close", () => resolve());
+    });
+    creator.destroy();
+    await creatorClosed;
+    const abortDeadline = Date.now() + 1_000;
+    let creatorAborted = false;
+    while (Date.now() < abortDeadline) {
+      const health = await (await fetch(`${endpoint}/health`)).json();
+      if (health.hls.startupAborted >= 1) {
+        creatorAborted = true;
+        break;
+      }
+      await wait(25);
+    }
+    expect(creatorAborted).toBe(true);
+    const metadata = getResponse(`${endpoint}/probe/42/0`);
+    await wait(500);
+    const duringStartup = await (await fetch(`${endpoint}/health`)).json();
+    expect(duringStartup.probes).toBe(0);
+    await expect(stat(probeStarted)).rejects.toThrow();
+
+    const followerResponse = await follower;
+    expect(followerResponse.statusCode).toBe(200);
+    let playlist = "";
+    for await (const chunk of followerResponse) playlist += String(chunk);
+    expect(playlist).toContain("#EXTM3U");
+    const metadataResponse = await metadata;
+    expect(metadataResponse.statusCode).toBe(200);
+    metadataResponse.resume();
+    await expect(stat(probeStarted)).resolves.toBeDefined();
+    expect(await readFile(launches, "utf8")).toBe("1");
+  }, 15_000);
+
+  test("does not retain an aborted pending HLS follower as a startup subscriber", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "pending-hls-launches");
+    const probeStarted = join(directory, "pending-hls-probe-started");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(launches)}, 'started');
+setInterval(() => {}, 1_000);
+`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(probeStarted)}, 'started');
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    format: { duration: '120', format_name: 'matroska' },
+    streams: [
+      { index: 0, codec_type: 'video', codec_name: 'h264', width: 1280, height: 720 },
+      { index: 1, codec_type: 'audio', codec_name: 'aac', channels: 2 },
+    ],
+  }));
+}, 500);
+`,
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+      { KHEYFLIX_HLS_STARTUP_TIMEOUT_MS: "5_000" },
+    );
+    const source = `${endpoint}/hls/42/0/pending-hls-follower/master.m3u8?quality=original`;
+    const leaderController = new AbortController();
+    const leader = fetch(source, { signal: leaderController.signal }).catch(() => undefined);
+    await waitForPath(probeStarted);
+    const followerController = new AbortController();
+    const follower = fetch(source, { signal: followerController.signal }).catch(() => undefined);
+    await wait(75);
+    followerController.abort();
+    await follower;
+    await waitForPath(launches);
+    leaderController.abort();
+    await leader;
+
+    const releaseDeadline = Date.now() + 1_000;
+    let released = false;
+    while (Date.now() < releaseDeadline) {
+      const health = await (await fetch(`${endpoint}/health`)).json();
+      if (health.capacity.activeHls === 0 && health.capacity.pending === 0) {
+        released = true;
+        break;
+      }
+      await wait(25);
+    }
+    expect(released).toBe(true);
+  }, 15_000);
+
+  test("continues a joined progressive response after a backpressured follower closes", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "progressive-backpressure-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs'); appendFileSync(${JSON.stringify(launches)}, '1'); const chunk = 'x'.repeat(8 * 1024); let index = 0; const write = () => { process.stdout.write(String(index++) + ':' + chunk); if (index < 64) return setTimeout(write, 5); setTimeout(() => process.stdout.write('after-backpressure'), 50); }; setTimeout(write, 200); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/transcode/42/0?token=progressive-backpressure&quality=bootstrap`;
+    const leader = fetch(source);
+    await waitForPath(launches);
+    const follower = await pausedResponse(source);
+    const leaderResponse = await leader;
+    expect(leaderResponse.status).toBe(200);
+    const reader = leaderResponse.body?.getReader();
+    await wait(500);
+    follower.destroy();
+
+    let body = "";
+    const deadline = Date.now() + 3_000;
+    while (!body.includes("after-backpressure") && Date.now() < deadline) {
+      const chunk = await reader?.read();
+      if (!chunk || chunk.done) break;
+      body += new TextDecoder().decode(chunk.value);
+    }
+    expect(body).toContain("after-backpressure");
+    expect(await readFile(launches, "utf8")).toBe("1");
+    await reader?.cancel();
+  }, 15_000);
+
+  test("rejects a different progressive request instead of joining its pending token", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "progressive-conflict-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs'); appendFileSync(${JSON.stringify(launches)}, '1'); setTimeout(() => process.stdout.write('title-42'), 700); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const first = fetch(
+      `${endpoint}/transcode/42/0?token=progressive-conflict&quality=bootstrap`,
+    ).catch(() => undefined);
+    await waitForPath(launches);
+
+    const conflict = await fetch(
+      `${endpoint}/transcode/43/0?token=progressive-conflict&quality=bootstrap`,
+    );
+
+    expect(conflict.status).toBe(409);
+    await fetch(`${endpoint}/stop/progressive-conflict`, { method: "POST" });
+    await first;
+  }, 15_000);
+
+  test("rejects a different progressive request after the shared stream has started", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nsetTimeout(() => { process.stdout.write('title-42-first'); setTimeout(() => process.stdout.write('title-42-still-live'), 400); }, 100); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const first = await fetch(
+      `${endpoint}/transcode/42/0?token=progressive-live-conflict&quality=bootstrap`,
+    );
+    expect(first.status).toBe(200);
+    const reader = first.body?.getReader();
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toContain(
+      "title-42-first",
+    );
+
+    const conflict = await fetch(
+      `${endpoint}/transcode/43/0?token=progressive-live-conflict&quality=bootstrap`,
+    );
+
+    expect(conflict.status).toBe(409);
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toContain(
+      "title-42-still-live",
+    );
+    await reader?.cancel();
+  }, 15_000);
+
+  test("rejects a different HLS request instead of joining its pending token", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const launches = join(directory, "hls-conflict-launches");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { appendFileSync, mkdirSync, writeFileSync } = require('node:fs'); const { dirname, join } = require('node:path'); appendFileSync(${JSON.stringify(launches)}, '1'); const output = process.argv.at(-1); setTimeout(() => { mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n'); writeFileSync(join(dirname(output), 'segment00000.ts'), 'segment'); }, 700); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const first = fetch(
+      `${endpoint}/hls/42/0/hls-conflict/master.m3u8?quality=bootstrap`,
+    ).catch(() => undefined);
+    await waitForPath(launches);
+
+    const conflict = await fetch(
+      `${endpoint}/hls/43/0/hls-conflict/master.m3u8?quality=bootstrap`,
+    );
+
+    expect(conflict.status).toBe(409);
+    await fetch(`${endpoint}/stop/hls-conflict`, { method: "POST" });
+    await first;
+  }, 15_000);
+
+  test("rejects an HLS segment request for different media in an active session", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nconst { dirname, join } = require('node:path'); const { mkdirSync, writeFileSync } = require('node:fs'); const output = process.argv.at(-1); mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n'); writeFileSync(join(dirname(output), 'segment00000.ts'), 'title-42-segment'); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const master = await fetch(
+      `${endpoint}/hls/42/0/hls-segment-conflict/master.m3u8?quality=bootstrap`,
+    );
+    expect(master.status).toBe(200);
+    const conflict = await fetch(
+      `${endpoint}/hls/43/0/hls-segment-conflict/segment00000.ts`,
+    );
+
+    expect(conflict.status).toBe(409);
+    await fetch(`${endpoint}/stop/hls-segment-conflict`, { method: "POST" });
+  }, 15_000);
+
+  test("rejects an HLS segment option override but serves the normal relative segment", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nconst { dirname, join } = require('node:path'); const { mkdirSync, writeFileSync } = require('node:fs'); const output = process.argv.at(-1); mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, '#EXTM3U\\n#EXT-X-TARGETDURATION:1\\n#EXTINF:0.75,\\nsegment00000.ts\\n'); writeFileSync(join(dirname(output), 'segment00000.ts'), 'bootstrap-segment'); setInterval(() => {}, 1000);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const master = await fetch(
+      `${endpoint}/hls/42/0/hls-segment-options/master.m3u8?quality=bootstrap`,
+    );
+    expect(master.status).toBe(200);
+    const conflict = await fetch(
+      `${endpoint}/hls/42/0/hls-segment-options/segment00000.ts?quality=480`,
+    );
+    const normal = await fetch(
+      `${endpoint}/hls/42/0/hls-segment-options/segment00000.ts`,
+    );
+
+    expect(conflict.status).toBe(409);
+    expect(normal.status).toBe(200);
+    await expect(normal.text()).resolves.toBe("bootstrap-segment");
+    await fetch(`${endpoint}/stop/hls-segment-options`, { method: "POST" });
+  }, 15_000);
+
+  test("does not report false capacity exhaustion after a same-token startup failure", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      "#!/usr/bin/env node\nprocess.stderr.write('ffmpeg should not run'); process.exit(91);\n",
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nsetTimeout(() => process.exit(91), 350);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+    const source = `${endpoint}/transcode/42/0?token=failed-single-flight&quality=original`;
+    const first = fetch(source);
+    await wait(75);
+    const follower = fetch(source);
+    const [firstResponse, followerResponse] = await Promise.all([first, follower]);
+
+    expect(firstResponse.status).not.toBe(429);
+    expect(followerResponse.status).not.toBe(429);
+    expect((await followerResponse.text()).toLowerCase()).not.toContain("capacity");
   }, 15_000);
 
   test("does not evict active bootstrap playback when the two-slot service is full", async () => {

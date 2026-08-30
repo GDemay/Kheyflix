@@ -26,6 +26,22 @@ describe("Kheyflix GitHub CLI boundary", () => {
     ]);
   });
 
+  it("allows the required repository-local branch prefix as an equals-form pull-request head", () => {
+    expect(
+      protectedArguments([
+        "pr",
+        "create",
+        "--head=originator/startup-singleflight",
+      ]),
+    ).toEqual([
+      "pr",
+      "create",
+      "--head=originator/startup-singleflight",
+      "--repo",
+      "GDemay/Kheyflix",
+    ]);
+  });
+
   it.each([
     ["raw API", ["api", "repos/octocat/Hello-World"]],
     ["positional repo", ["repo", "view", "octocat/Hello-World"]],
