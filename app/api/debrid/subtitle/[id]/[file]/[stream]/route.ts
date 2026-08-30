@@ -33,6 +33,11 @@ const handleGet = async (
       },
     });
   } catch (error) {
+    if (
+      request.signal.aborted ||
+      (error instanceof Error && error.name === "AbortError")
+    )
+      return new Response(null, { status: 499 });
     const known =
       error instanceof AllDebridError
         ? error

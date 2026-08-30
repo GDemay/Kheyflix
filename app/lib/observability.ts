@@ -195,9 +195,16 @@ export const observeApi = <TArgs extends readonly unknown[]>(
   }
   const durationMs = performance.now() - startedAt;
   const correlated = await correlatedResponse(response, requestId, durationMs);
-  const level = response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info";
+  const clientCancelled = response.status === 499;
+  const level = clientCancelled
+    ? "debug"
+    : response.status >= 500
+      ? "error"
+      : response.status >= 400
+        ? "warn"
+        : "info";
   const completionContext = {
-    message: `${operationName(route, request.method)} ${response.status >= 400 ? "failed" : "succeeded"} (${response.status}) in ${durationMs.toFixed(1)} ms`,
+    message: `${operationName(route, request.method)} ${clientCancelled ? "cancelled by client" : response.status >= 400 ? "failed" : "succeeded"} (${response.status}) in ${durationMs.toFixed(1)} ms`,
     requestId,
     method: request.method,
     route,
@@ -206,21 +213,27 @@ export const observeApi = <TArgs extends readonly unknown[]>(
     ...(correlated.errorCode ? { errorCode: correlated.errorCode } : {}),
     ...(unhandled ? { error: unhandled } : {}),
   };
-  const routineSuccess = response.status < 400 && (
-    route === "/api/health" ||
-    (route.includes("/api/debrid/transcode") && ["PATCH", "POST"].includes(request.method)) ||
-    (route.includes("/api/debrid/stream") && response.status === 206 && request.headers.has("range"))
-  );
+  const routineSuccess =
+    clientCancelled ||
+    (response.status < 400 &&
+      (route === "/api/health" ||
+        (route.includes("/api/debrid/transcode") &&
+          ["PATCH", "POST"].includes(request.method)) ||
+        (route.includes("/api/debrid/stream") &&
+          response.status === 206 &&
+          request.headers.has("range"))));
   const pending = pendingRequestLogs.get(request);
   if (pending) {
     const { code, ...domainContext } = pending.context;
-    writeLog(pending.level, pending.event, {
+    writeLog(clientCancelled ? "debug" : pending.level, clientCancelled ? "http.request.cancelled" : pending.event, {
       ...completionContext,
       ...domainContext,
-      message: eventMessage(pending.event, request, {
-        ...pending.context,
-        status: response.status,
-      }),
+      message: clientCancelled
+        ? completionContext.message
+        : eventMessage(pending.event, request, {
+            ...pending.context,
+            status: response.status,
+          }),
       ...(typeof code === "string" ? { errorCode: code } : {}),
     });
   } else if (!routineSuccess) {

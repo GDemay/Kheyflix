@@ -133,6 +133,31 @@ describe("API observability", () => {
     expect(entry.error).toEqual({ type: "Error", message: "Invalid media selection." });
   });
 
+  it("marks a pending request as client cancellation instead of a provider failure", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const handler = observeApi("/api/debrid/stream/:id/:file", async (request) => {
+      writeRequestLog("warn", "debrid.stream.failed", request, {
+        code: "STREAM_REQUEST_ABORTED",
+        error: new Error("The playback request was canceled."),
+      });
+      return new Response(null, { status: 499 });
+    });
+
+    await handler(new Request("https://kheyflix.test/api/debrid/stream/42/0"));
+
+    expect(warning).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(JSON.parse(String(debug.mock.calls[0][0]))).toMatchObject({
+      event: "http.request.cancelled",
+      level: "debug",
+      status: 499,
+      errorCode: "STREAM_REQUEST_ABORTED",
+      message: expect.stringMatching(/^Stream media cancelled by client \(499\) in /),
+    });
+  });
+
   it.each([
     ["/api/health", "GET", 200, {}],
     ["/api/debrid/transcode/:id/:file", "PATCH", 204, {}],

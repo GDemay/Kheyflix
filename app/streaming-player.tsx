@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Captions,
@@ -326,6 +326,7 @@ export default function StreamingPlayer({
     startupTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     startupSettled = useRef(false),
     firstFrameRecorded = useRef(false),
+    sourceGeneration = useRef(0),
     bufferingStartedAt = useRef(0),
     rebufferCount = useRef(0),
     sourceAttempt = useRef(0),
@@ -476,6 +477,7 @@ export default function StreamingPlayer({
     [mediaInfoAttempt, setMediaInfoAttempt] = useState(0),
     [controls, setControls] = useState(true),
     [transcoderSessionTransition, setTranscoderSessionTransition] = useState(false);
+  const viewerPlaybackRequestedAt = useRef<number>();
   const transcoded =
       sessionConfiguration.compatible ||
       sessionConfiguration.rendition !== "original",
@@ -507,6 +509,13 @@ export default function StreamingPlayer({
         ? undefined
         : subtitle;
   const playbackMode = useRef({ effectiveBootstrap, nativeHlsPlayback });
+  useLayoutEffect(() => {
+    // Desktop playback begins as soon as the player route is entered, so the
+    // viewer metric includes metadata and provider-resolution latency before a
+    // source can be attached. iPhone begins at its explicit trusted tap below.
+    if (!iosPlayback && viewerPlaybackRequestedAt.current === undefined)
+      viewerPlaybackRequestedAt.current = performance.now();
+  }, [iosPlayback]);
   useEffect(() => {
     playbackMode.current = { effectiveBootstrap, nativeHlsPlayback };
   }, [effectiveBootstrap, nativeHlsPlayback]);
@@ -618,12 +627,14 @@ export default function StreamingPlayer({
     (
       event:
         | "first_frame"
+        | "bootstrap_eof_before_frame"
         | "native_vod_handoff"
         | "rebuffer"
         | "startup_timeout"
         | "startup_retry"
         | "failure",
       elapsedMs: number,
+      details: { sourceElapsedMs?: number } = {},
     ) => {
       const payload = JSON.stringify({
         event,
@@ -632,6 +643,14 @@ export default function StreamingPlayer({
         attempt: Math.max(1, sourceAttempt.current),
         phase: effectiveBootstrap ? "bootstrap" : "standard",
         quality: activeQuality,
+        ...(details.sourceElapsedMs === undefined
+          ? {}
+          : {
+              sourceElapsedMs: Math.max(
+                0,
+                Math.round(details.sourceElapsedMs),
+              ),
+            }),
       });
       try {
         if (
@@ -964,14 +983,20 @@ export default function StreamingPlayer({
   const absoluteTimeRef = useRef(absoluteTime),
     sessionConfigurationRef = useRef(sessionConfiguration),
     replaceTranscoderSessionRef = useRef(replaceTranscoderSession);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (startupTimer.current !== undefined) {
       clearTimeout(startupTimer.current);
       startupTimer.current = undefined;
     }
+    // A source gate or replacement invalidates any frame callback queued by
+    // the prior decoder. The current source owns the next decoded-frame
+    // measurement, even when the browser reuses the same video element.
+    sourceGeneration.current += 1;
     if (!source) return;
     sourceAttempt.current += 1;
     playbackRequestedAt.current = performance.now();
+    if (viewerPlaybackRequestedAt.current === undefined)
+      viewerPlaybackRequestedAt.current = playbackRequestedAt.current;
     startupDeadline.current =
       playbackRequestedAt.current +
       (nativeHlsPlayback
@@ -979,7 +1004,6 @@ export default function StreamingPlayer({
         : transcoded
           ? COMPATIBLE_STARTUP_TIMEOUT_MS
           : NATIVE_STARTUP_TIMEOUT_MS);
-    firstFrameRecorded.current = false;
     startupSettled.current = false;
     bufferingStartedAt.current = 0;
   }, [nativeHlsPlayback, source, transcoded]);
@@ -1293,6 +1317,10 @@ export default function StreamingPlayer({
     return () => cancelAnimationFrame(frame);
   }, []);
   useEffect(() => {
+    // Auto quality changes are intentionally deferred until the viewer has a
+    // real frame. `play` alone only means a browser accepted the request; it
+    // is not evidence that bootstrap actually reached the decoder.
+    if (firstFrameMs === undefined) return;
     const target = autoQualityUpgradeTarget({
       bootstrap: sessionConfiguration.bootstrap,
       nativeHlsPlayback,
@@ -1309,7 +1337,7 @@ export default function StreamingPlayer({
       promoteAutoQuality(target);
     }, BOOTSTRAP_PROMOTION_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [loading, nativeHlsPlayback, playing, promoteAutoQuality, qualityMode, sessionConfiguration.bootstrap, sessionConfiguration.rendition, sourceHeight, sustainedCompatibility, transcoded]);
+  }, [firstFrameMs, loading, nativeHlsPlayback, playing, promoteAutoQuality, qualityMode, sessionConfiguration.bootstrap, sessionConfiguration.rendition, sourceHeight, sustainedCompatibility, transcoded]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -1525,14 +1553,27 @@ export default function StreamingPlayer({
           }
           const element = video.current;
           if (!firstFrameRecorded.current && element) {
+            const generation = sourceGeneration.current,
+              currentSource = element.currentSrc;
             const record = () => {
-              if (firstFrameRecorded.current) return;
+              if (
+                firstFrameRecorded.current ||
+                generation !== sourceGeneration.current ||
+                currentSource !== element.currentSrc
+              )
+                return;
               firstFrameRecorded.current = true;
-              const elapsed = performance.now() - playbackRequestedAt.current;
+              const sourceElapsed = performance.now() - playbackRequestedAt.current,
+                elapsed =
+                  performance.now() -
+                  (viewerPlaybackRequestedAt.current ?? playbackRequestedAt.current);
               setFirstFrameMs(elapsed);
-              reportPlayback("first_frame", elapsed);
+              reportPlayback("first_frame", elapsed, {
+                sourceElapsedMs: sourceElapsed,
+              });
               console.info("[playback] first frame", {
                 milliseconds: Math.round(elapsed),
+                sourceMilliseconds: Math.round(sourceElapsed),
                 phase: effectiveBootstrap ? "bootstrap" : "standard",
                 quality: activeQuality,
               });
@@ -1548,6 +1589,15 @@ export default function StreamingPlayer({
             // Bootstrap is intentionally capped at 30 seconds, so its EOF is
             // never evidence that the title finished. Promote from the exact
             // current position rather than recording a false completion.
+            if (!firstFrameRecorded.current) {
+              const elapsed = performance.now() - playbackRequestedAt.current;
+              reportPlayback("bootstrap_eof_before_frame", elapsed);
+              console.warn("[playback] bootstrap ended before a decoded frame", {
+                id,
+                file,
+                milliseconds: Math.round(elapsed),
+              });
+            }
             promoteAutoQuality(
               bestAutoQuality(sourceHeight),
               playbackOffset + event.currentTarget.currentTime,
@@ -1671,6 +1721,8 @@ export default function StreamingPlayer({
             event.stopPropagation();
             const element = video.current;
             if (!element || !resolvedSource) return;
+            if (viewerPlaybackRequestedAt.current === undefined)
+              viewerPlaybackRequestedAt.current = performance.now();
             element.muted = true;
             element.volume = 0;
             if (iosPlayback && !iosSourceActivated) {
