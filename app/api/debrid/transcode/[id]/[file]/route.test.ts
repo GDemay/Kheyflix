@@ -41,6 +41,28 @@ describe("compatible playback gateway", () => {
     );
   });
 
+  it("does not globally stop a shared session when one GET request is cancelled", async () => {
+    process.env.KHEYFLIX_TRANSCODER_URL = "http://transcoder.test";
+    const browser = new AbortController();
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      pull() {},
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(upstreamBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = new Request(
+      "https://kheyflix.test/api/debrid/transcode/42/0?session=shared-42&quality=bootstrap",
+      { signal: browser.signal },
+    );
+    const response = await GET(request, context);
+
+    browser.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await response.body?.cancel("one viewer left");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("normalizes invalid input and forwards the capacity retry contract", async () => {
     process.env.KHEYFLIX_TRANSCODER_URL = "http://transcoder.test";
     const fetchMock = vi.fn().mockResolvedValue(
