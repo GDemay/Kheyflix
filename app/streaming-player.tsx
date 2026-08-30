@@ -28,12 +28,12 @@ import {
   bestAutoQuality,
   BOOTSTRAP_PROMOTION_DELAY_MS,
   bootstrapStartOffset,
+  awaitTranscoderSessionRelease,
   autoQualityUpgradeTarget,
   canStartPlaybackSource,
   needsCompatiblePlayback,
   playbackSurfaceState,
   QualityMode,
-  releaseTranscoderSession,
   RenditionQuality,
   requiresMutedAutoplay,
   shouldSurfaceMediaInfoError,
@@ -108,7 +108,24 @@ type NativeVodPrewarm = {
   start: number;
 };
 
-const RELEASED_TRANSCODER_SESSION_LIMIT = 256;
+const RELEASED_TRANSCODER_SESSION_LIMIT = 256,
+  TRANSCODER_RELEASE_TIMEOUT_MS = 10_000;
+
+const waitForTranscoderReleaseRetry = (
+  milliseconds: number,
+  signal?: AbortSignal,
+) =>
+  new Promise<boolean>((resolve) => {
+    const complete = (released: boolean) => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      resolve(released);
+    };
+    const aborted = () => complete(false);
+    const timer = window.setTimeout(() => complete(true), milliseconds);
+    if (signal?.aborted) aborted();
+    else signal?.addEventListener("abort", aborted, { once: true });
+  });
 
 const rememberReleasedTranscoderSession = (sessions: Set<string>, token: string) => {
   sessions.add(token);
@@ -350,7 +367,7 @@ export default function StreamingPlayer({
     nativeVodPrewarmPending = useRef(false),
     releasedTranscoderSessions = useRef(new Set<string>()),
     bestEffortStoppedTranscoderSessions = useRef(new Set<string>()),
-    releasingTranscoderSessions = useRef(new Map<string, Promise<void>>()),
+    releasingTranscoderSessions = useRef(new Map<string, Promise<boolean>>()),
     autoUpgradeRequested = useRef<RenditionQuality | null>(null),
     // Metadata failures that are safe to surface are authoritative. A media
     // element can report its own error in the same event turn while a
@@ -699,38 +716,45 @@ export default function StreamingPlayer({
     };
   }, [controls, pausedByUser, playing]);
   const stopSessionBeforeReplacement = useCallback(
-    async (token: string) => {
-      if (releasedTranscoderSessions.current.has(token)) return;
+    async (token: string): Promise<boolean> => {
+      if (releasedTranscoderSessions.current.has(token)) return true;
       const existingRelease = releasingTranscoderSessions.current.get(token);
       if (existingRelease) {
-        await existingRelease;
-        return;
+        return existingRelease;
       }
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 3_000);
-      const release = Promise.resolve()
-        .then(() =>
-          releaseTranscoderSession(
-            fetch,
-            String(id),
-            file,
-            token,
-            controller.signal,
-          ),
-        )
-        .then(() => {
-          rememberReleasedTranscoderSession(releasedTranscoderSessions.current, token);
+      const timeout = window.setTimeout(
+        () => controller.abort(),
+        TRANSCODER_RELEASE_TIMEOUT_MS,
+      );
+      const release = awaitTranscoderSessionRelease(
+        fetch,
+        String(id),
+        file,
+        token,
+        controller.signal,
+        waitForTranscoderReleaseRetry,
+      )
+        .then((released) => {
+          if (released)
+            rememberReleasedTranscoderSession(
+              releasedTranscoderSessions.current,
+              token,
+            );
+          return released;
         })
         .catch(() => {
-          // The replacement still has bounded server-side admission. A
-          // best-effort stop must not strand the viewer on a paused frame.
+          // Never start a successor while the old session's release is
+          // unknown. The source gate keeps the current decoder from masking
+          // an actual capacity leak as a fast recovery.
+          return false;
         })
         .finally(() => {
           window.clearTimeout(timeout);
           releasingTranscoderSessions.current.delete(token);
         });
       releasingTranscoderSessions.current.set(token, release);
-      await release;
+      return release;
     },
     [file, id],
   );
@@ -761,7 +785,8 @@ export default function StreamingPlayer({
         void stopSessionBeforeReplacement(prepared.session);
       }
       let selected = { position, replacement };
-      let target = Math.max(0, Math.min(duration || position, position));
+      let target = Math.max(0, Math.min(duration || position, position)),
+        releaseConfirmed = true;
       persistRef.current(target);
       // With a maximum of two transcoder jobs, every in-player replacement
       // must make its new source wait for the old one to be released. The
@@ -772,8 +797,17 @@ export default function StreamingPlayer({
       setError(false);
       setErrorMessage("");
       try {
-        if (transcoded && !transition.skipCurrentStop)
-          await stopSessionBeforeReplacement(activeSession);
+        if (transcoded && !transition.skipCurrentStop) {
+          releaseConfirmed = await stopSessionBeforeReplacement(activeSession);
+          if (!releaseConfirmed) {
+            setLoading(false);
+            setErrorMessage(
+              "The previous stream is still closing. Please try again in a moment.",
+            );
+            setError(true);
+            return false;
+          }
+        }
         // A provider metadata error may have arrived while the prior source
         // was being released. Do not let that older recovery publish a fresh
         // session after the viewer has been shown a terminal, retryable error.
@@ -811,7 +845,7 @@ export default function StreamingPlayer({
         // releasing. Start its latest requested source only after the stale
         // replacement has been invalidated, without briefly reopening the
         // old source gate.
-        if (queued && !terminalPlaybackFailure.current)
+        if (queued && releaseConfirmed && !terminalPlaybackFailure.current)
           void replaceTranscoderSession(queued.position, queued.replacement);
         else setTranscoderSessionTransition(false);
       }
@@ -988,7 +1022,19 @@ export default function StreamingPlayer({
     // this episode is still being stopped. The source gate keeps the current
     // player quiet during the bounded release request.
     setTranscoderSessionTransition(true);
-    void stopSessionBeforeReplacement(activeSession).finally(navigateToNext);
+    void stopSessionBeforeReplacement(activeSession).then((released) => {
+      if (released) {
+        navigateToNext();
+        return;
+      }
+      nextEpisodeNavigationPending.current = false;
+      setTranscoderSessionTransition(false);
+      setLoading(false);
+      setErrorMessage(
+        "The current stream is still closing. Please try the next episode again shortly.",
+      );
+      setError(true);
+    });
   }, [activeSession, navigate, next, persist, stopSessionBeforeReplacement, transcoded]);
 
   const absoluteTimeRef = useRef(absoluteTime),

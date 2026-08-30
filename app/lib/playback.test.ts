@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BOOTSTRAP_PROMOTION_DELAY_MS,
   availableQualities,
+  awaitTranscoderSessionRelease,
   bestAutoQuality,
   autoQualityUpgradeTarget,
   bootstrapStartOffset,
@@ -200,12 +201,71 @@ describe("playback compatibility", () => {
   it("releases a quality prewarm session before the upgraded stream starts", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
 
-    await releaseTranscoderSession(fetcher, "72935164", 0, "prewarm-123");
+    await expect(
+      releaseTranscoderSession(fetcher, "72935164", 0, "prewarm-123"),
+    ).resolves.toEqual({ released: true });
 
     expect(fetcher).toHaveBeenCalledWith(
       "/api/debrid/transcode/72935164/0?session=prewarm-123",
       { method: "POST", keepalive: true, signal: undefined },
     );
+  });
+
+  it("keeps a replacement gated while a session is still closing", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(null, { status: 202, headers: { "Retry-After": "3" } }),
+    );
+
+    await expect(
+      releaseTranscoderSession(fetcher, "72935164", 0, "closing-123"),
+    ).resolves.toEqual({ released: false, retryAfterMs: 3_000 });
+  });
+
+  it("does not release a replacement gate until a pending stop confirms closure", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 202, headers: { "Retry-After": "3" } }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const waitForRetry = vi.fn().mockResolvedValue(true);
+    const controller = new AbortController();
+
+    await expect(
+      awaitTranscoderSessionRelease(
+        fetcher,
+        "72935164",
+        0,
+        "closing-then-closed",
+        controller.signal,
+        waitForRetry,
+      ),
+    ).resolves.toBe(true);
+    expect(waitForRetry).toHaveBeenCalledWith(3_000, controller.signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the replacement gate closed when its bounded stop wait is aborted", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(null, { status: 202, headers: { "Retry-After": "3" } }),
+    );
+    const controller = new AbortController();
+    const waitForRetry = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return false;
+    });
+
+    await expect(
+      awaitTranscoderSessionRelease(
+        fetcher,
+        "72935164",
+        0,
+        "closing-never-confirmed",
+        controller.signal,
+        waitForRetry,
+      ),
+    ).resolves.toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it.each([

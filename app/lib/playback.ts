@@ -154,18 +154,67 @@ type PlaybackFetcher = (
   init: RequestInit,
 ) => Promise<Response>;
 
-export const releaseTranscoderSession = (
+export type TranscoderSessionRelease =
+  | { released: true }
+  | { released: false; retryAfterMs: number };
+
+export type TranscoderSessionReleaseWaiter = (
+  retryAfterMs: number,
+  signal?: AbortSignal,
+) => Promise<boolean>;
+
+const releaseRetryAfterMs = (value: string | null) => {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 1 && seconds <= 10
+    ? Math.round(seconds * 1_000)
+    : 3_000;
+};
+
+export const releaseTranscoderSession = async (
   fetcher: PlaybackFetcher,
   id: string,
   file: number,
   session: string,
   signal?: AbortSignal,
-) =>
-  fetcher(`/api/debrid/transcode/${id}/${file}?session=${session}`, {
+): Promise<TranscoderSessionRelease> => {
+  const response = await fetcher(`/api/debrid/transcode/${id}/${file}?session=${session}`, {
     method: "POST",
     keepalive: true,
     signal,
   });
+  if (response.status === 204) return { released: true };
+  if (response.status === 202)
+    return {
+      released: false,
+      retryAfterMs: releaseRetryAfterMs(response.headers.get("retry-after")),
+    };
+  throw new Error("The previous stream could not be released.");
+};
+
+// A successful stop acknowledgement is deliberately distinct from a request
+// that merely began encoder teardown. Starting a replacement before the latter
+// becomes a confirmed close can race the server's bounded playback capacity.
+export const awaitTranscoderSessionRelease = async (
+  fetcher: PlaybackFetcher,
+  id: string,
+  file: number,
+  session: string,
+  signal: AbortSignal,
+  waitForRetry: TranscoderSessionReleaseWaiter,
+): Promise<boolean> => {
+  while (!signal.aborted) {
+    const outcome = await releaseTranscoderSession(
+      fetcher,
+      id,
+      file,
+      session,
+      signal,
+    );
+    if (outcome.released) return true;
+    if (!(await waitForRetry(outcome.retryAfterMs, signal))) return false;
+  }
+  return false;
+};
 
 export type PlaybackSurfaceInput = {
   controls: boolean;

@@ -91,8 +91,13 @@ describe("compatible playback gateway", () => {
     expect(request.signal.aborted).toBe(true);
     expect(relaySignal).not.toBe(request.signal);
     expect(relaySignal?.aborted).toBe(false);
-    resolveRelay!(new Response(null, { status: 204 }));
-    expect((await response).status).toBe(204);
+    resolveRelay!(new Response(null, {
+      status: 202,
+      headers: { "retry-after": "3" },
+    }));
+    const relayResponse = await response;
+    expect(relayResponse.status).toBe(202);
+    expect(relayResponse.headers.get("retry-after")).toBe("3");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://transcoder.test/stop/closing-42",
       expect.objectContaining({ method: "POST" }),

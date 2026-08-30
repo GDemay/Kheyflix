@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { releaseActivePlaybackSession } from "./playback-cleanup";
 
 const mkvPlaybackPath =
   process.env.KHEYFLIX_MKV_PLAYBACK_TEST_PATH ||
@@ -6,10 +7,12 @@ const mkvPlaybackPath =
 const safeMediaPath = (value: string) => new URL(value).pathname;
 
 test.afterEach(async ({ page }) => {
-  if (!page.isClosed())
+  if (!page.isClosed()) {
+    await releaseActivePlaybackSession(page);
     await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(
       () => undefined,
     );
+  }
 });
 
 test("a real MKV starts progressively and keeps advancing", async ({ page }) => {

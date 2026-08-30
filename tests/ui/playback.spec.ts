@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { releaseActivePlaybackSession } from "./playback-cleanup";
 
 const playbackPath =
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
@@ -8,15 +9,78 @@ const trackPlaybackPath =
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
   "/stream/660270988/3/shrek-2001-multilingual";
 const safeMediaPath = (value: string) => new URL(value).pathname;
+const controlOnlyMedia = {
+  duration: 600,
+  format: "matroska,webm",
+  video: [{ index: 0, codec: "h264", width: 1920, height: 1080 }],
+  audio: [
+    {
+      index: 1,
+      codec: "aac",
+      language: "eng",
+      title: "English",
+      channels: 2,
+      default: true,
+    },
+    {
+      index: 2,
+      codec: "aac",
+      language: "fra",
+      title: "French",
+      channels: 2,
+      default: false,
+    },
+  ],
+  subtitles: [
+    {
+      index: 3,
+      codec: "webvtt",
+      language: "eng",
+      title: "English",
+      supported: true,
+    },
+  ],
+};
+
+const mockControlOnlyPlayback = async (page: Page) => {
+  let interceptedMediaRequests = 0;
+  await page.addInitScript(() => {
+    window.addEventListener(
+      "error",
+      (event) => {
+        if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await page.context().route(
+    "**/api/debrid/**",
+    async (route) => {
+      interceptedMediaRequests += 1;
+      if (new URL(route.request().url()).pathname.startsWith("/api/debrid/media/"))
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify(controlOnlyMedia),
+        });
+      else await route.fulfill({ status: 204 });
+    },
+  );
+  // The route fulfillment prevents every matched request from reaching the
+  // backend. Keep an assertion so a control-only test cannot accidentally
+  // become a no-op while production playback runs beside it.
+  return () => expect(interceptedMediaRequests).toBeGreaterThan(0);
+};
 
 test.afterEach(async ({ page }) => {
   // Release the current session before the next production playback profile
-  // starts. Context teardown is best-effort, while this route transition
-  // exercises the same explicit player cleanup a viewer performs.
-  if (!page.isClosed())
+  // starts. Context teardown is best-effort, whereas this awaits the exact
+  // close contract that protects the two-slot transcoder from test bleed.
+  if (!page.isClosed()) {
+    await releaseActivePlaybackSession(page);
     await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(
       () => undefined,
     );
+  }
 });
 
 test("a real movie starts and keeps streaming", async ({ page }) => {
@@ -243,11 +307,11 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     .toBeGreaterThan(qualitySwitchStart + 3);
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(mediaFailures).toEqual([]);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
 });
 
-test("real media exposes audio and subtitle languages", async ({ page }) => {
+test("audio and subtitle controls expose translated tracks", async ({ page }) => {
   test.setTimeout(60_000);
+  const assertSynthetic = await mockControlOnlyPlayback(page);
   await page.goto(trackPlaybackPath, { waitUntil: "domcontentloaded" });
 
   await expect(
@@ -267,6 +331,7 @@ test("real media exposes audio and subtitle languages", async ({ page }) => {
   await expect(subtitleMenu.getByRole("button", { name: "English" })).toHaveClass(
     /active/,
   );
+  assertSynthetic();
 });
 
 test("pointer movement reveals unobtrusive playback chrome", async ({ page }, testInfo) => {
@@ -300,6 +365,7 @@ test("pointer movement reveals unobtrusive playback chrome", async ({ page }, te
       true,
     );
   });
+  const assertSynthetic = await mockControlOnlyPlayback(page);
   await page.clock.install();
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
@@ -339,10 +405,12 @@ test("pointer movement reveals unobtrusive playback chrome", async ({ page }, te
   await expect(page.getByRole("status", { name: "Buffering" })).toBeHidden();
   await page.clock.fastForward(3_000);
   await expect(shell).not.toHaveClass(/controls-visible/);
+  assertSynthetic();
 });
 
 test("touch playback keeps central quick controls", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "phone", "touch-specific behavior");
+  const assertSynthetic = await mockControlOnlyPlayback(page);
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
   const shell = page.locator("main.player-shell");
   const video = page.locator("video");
@@ -377,4 +445,5 @@ test("touch playback keeps central quick controls", async ({ page }, testInfo) =
   );
   await expect(page.getByRole("status", { name: "Buffering" })).toBeHidden();
   await expect(quickControls).toBeVisible();
+  assertSynthetic();
 });

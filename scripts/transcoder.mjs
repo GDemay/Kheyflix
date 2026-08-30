@@ -37,6 +37,9 @@ const jobs = new Map(),
   cancelledStartupTokens = new Set(),
   stoppingJobs = new Set(),
   stoppingJobCompletions = new Map(),
+  stoppingTokenCompletions = new Map(),
+  playbackChildClosures = new WeakMap(),
+  closedPlaybackChildren = new WeakSet(),
   jobTouched = new Map(),
   probes = new Map(),
   probeRequests = new Map(),
@@ -46,6 +49,8 @@ let capacityRejected = 0,
   capacityReclaimed = 0,
   abandonedStartups = 0;
 const capacityWaitMetrics = {
+  explicitStopWaits: 0,
+  explicitStopTimeouts: 0,
   reclaimedWaits: 0,
   reclaimedTimeouts: 0,
   stoppingWaits: 0,
@@ -123,10 +128,28 @@ const MAX_JOBS = configuredMaxJobs(process.env.KHEYFLIX_MAX_JOBS || 2),
     "webvtt",
     "mov_text",
   ]);
+const trackPlaybackChild = (child) => {
+  if (playbackChildClosures.has(child)) return child;
+  let resolve;
+  const completion = new Promise((complete) => {
+    resolve = complete;
+  });
+  playbackChildClosures.set(child, completion);
+  child.once("close", (code, signal) => {
+    closedPlaybackChildren.add(child);
+    resolve({ code, signal });
+  });
+  return child;
+};
+const playbackChildClosed = (child) => closedPlaybackChildren.has(child);
+const playbackChildClosure = (child) => {
+  trackPlaybackChild(child);
+  return playbackChildClosures.get(child);
+};
 const activeHlsJobs = () =>
-  Array.from(hlsJobs.values()).filter((job) => job.child.exitCode === null).length;
+  Array.from(hlsJobs.values()).filter((job) => !playbackChildClosed(job.child)).length;
 const activeTranscodeJobs = () =>
-  Array.from(jobs.values()).filter((child) => child.exitCode === null).length;
+  Array.from(jobs.values()).filter((child) => !playbackChildClosed(child)).length;
 const activeJobs = () =>
   activeTranscodeJobs() +
   activeHlsJobs() +
@@ -148,9 +171,12 @@ const withCapacityAdmission = async (operation) => {
   }
 };
 const waitForPlaybackStop = async (completion, reason) => {
-  const [waitMetric, timeoutMetric] = reason === "reclaimed"
-    ? ["reclaimedWaits", "reclaimedTimeouts"]
-    : ["stoppingWaits", "stoppingTimeouts"];
+  const [waitMetric, timeoutMetric] =
+    reason === "reclaimed"
+      ? ["reclaimedWaits", "reclaimedTimeouts"]
+      : reason === "explicit"
+        ? ["explicitStopWaits", "explicitStopTimeouts"]
+        : ["stoppingWaits", "stoppingTimeouts"];
   capacityWaitMetrics[waitMetric] += 1;
   let timeout;
   try {
@@ -181,10 +207,32 @@ const waitForReclaimedPlaybackStop = async (token) => {
   return waitForPlaybackStop(stopJob(token, true), "reclaimed");
 };
 const waitForStoppingPlaybackStop = async () => {
-  const completions = Array.from(stoppingJobs, (child) =>
+  const stoppingCompletions = Array.from(stoppingJobs, (child) =>
     stoppingJobCompletions.get(child),
   ).filter(Boolean);
-  if (!completions.length) return false;
+  if (!stoppingCompletions.length) return false;
+  // A stop removes its session from the active maps before the child closes,
+  // but another capacity-managed stream can finish in that same handoff
+  // window. Race every live close rather than waiting only for the original
+  // stop: the first actual slot release is enough to admit one successor.
+  const activeClosures = [
+    ...jobs.values(),
+    ...Array.from(hlsJobs.values(), (job) => job.child),
+    ...subtitleJobs,
+  ]
+    .filter((child) => !playbackChildClosed(child))
+    .map(playbackChildClosure);
+  const pendingCompletions = Array.from(
+    pendingJobs.values(),
+    (reservation) => reservation.settled,
+  );
+  const completions = [
+    ...new Set([
+      ...stoppingCompletions,
+      ...activeClosures,
+      ...pendingCompletions,
+    ]),
+  ];
   return waitForPlaybackStop(Promise.race(completions), "stopping");
 };
 const reclaimPlaybackCapacity = async () => {
@@ -194,7 +242,7 @@ const reclaimPlaybackCapacity = async () => {
       ...Array.from(hlsJobs.entries())
         .filter(
           ([token, job]) =>
-            job.child.exitCode === null &&
+            !playbackChildClosed(job.child) &&
             reclaimablePlaybackJob(
               job.cacheable,
               jobTouched.get(token) || 0,
@@ -206,7 +254,7 @@ const reclaimPlaybackCapacity = async () => {
       ...Array.from(jobs.entries())
         .filter(
           ([token, child]) =>
-            child.exitCode === null &&
+            !playbackChildClosed(child) &&
             reclaimablePlaybackJob(
               bootstrapJobs.has(token),
               jobTouched.get(token) || 0,
@@ -296,15 +344,15 @@ const mediaKey = (id, file) => `${id}:${file}`;
 const wait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const spawnPlaybackEncoder = (args, stdio) =>
-  spawn(ffmpeg, args, {
+  trackPlaybackChild(spawn(ffmpeg, args, {
     stdio,
     // Each capacity-managed encoder owns a process group on POSIX. A stop can
     // then terminate FFmpeg and any helper that inherited its media pipes.
     // Windows does not support the negative-PID process-group signal below.
     detached: process.platform !== "win32",
-  });
+  }));
 const terminatePlaybackEncoder = (child) => {
-  if (child.exitCode !== null) return;
+  if (playbackChildClosed(child)) return;
   if (process.platform !== "win32" && child.pid) {
     try {
       process.kill(-child.pid, "SIGKILL");
@@ -314,7 +362,8 @@ const terminatePlaybackEncoder = (child) => {
       // cannot signal it; direct child termination remains the safe fallback.
     }
   }
-  if (!child.killed) child.kill("SIGKILL");
+  if (child.exitCode === null && child.signalCode === null && !child.killed)
+    child.kill("SIGKILL");
 };
 const beginPlaybackStartup = (key) => {
   const existing = playbackStartupGates.get(key);
@@ -351,7 +400,7 @@ const internalInputHeaders = () => {
 const stopChild = (child) => {
   const existing = stoppingJobCompletions.get(child);
   if (existing) return existing;
-  if (child.exitCode !== null) return Promise.resolve();
+  if (playbackChildClosed(child)) return Promise.resolve();
   stoppingJobs.add(child);
   let resolve;
   const completion = new Promise((complete) => {
@@ -363,13 +412,14 @@ const stopChild = (child) => {
     stoppingJobCompletions.delete(child);
     resolve();
   };
-  child.once("close", complete);
-  if (child.exitCode !== null) complete();
-  else terminatePlaybackEncoder(child);
+  playbackChildClosure(child).then(complete);
+  terminatePlaybackEncoder(child);
   return completion;
 };
 const stopJob = (token, force = false) => {
-  cancelPlaybackReservation(token);
+  const existing = stoppingTokenCompletions.get(token);
+  if (existing) return existing;
+  const reservation = cancelPlaybackReservation(token);
   const stopping = [];
   const child = jobs.get(token);
   if (child) stopping.push(stopChild(child));
@@ -383,25 +433,21 @@ const stopJob = (token, force = false) => {
     void rm(hls.directory, { recursive: true, force: true });
   }
   jobTouched.delete(token);
-  return Promise.all(stopping);
+  const completion = Promise.all([
+    ...stopping,
+    reservation?.settled || Promise.resolve(),
+  ]);
+  if (stopping.length || reservation) {
+    stoppingTokenCompletions.set(token, completion);
+    void completion.finally(() => {
+      if (stoppingTokenCompletions.get(token) === completion)
+        stoppingTokenCompletions.delete(token);
+    });
+  }
+  return completion;
 };
 const waitForStoppedJob = async (token) => {
-  const reservation = pendingJobs.get(token),
-    completion = Promise.all([
-      stopJob(token, true),
-      reservation?.settled || Promise.resolve(),
-    ]);
-  let timeout;
-  try {
-    await Promise.race([
-      completion,
-      new Promise((resolve) => {
-        timeout = setTimeout(resolve, PLAYBACK_STOP_WAIT_MS);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
+  return waitForPlaybackStop(stopJob(token, true), "explicit");
 };
 const hlsStartupError = () =>
   new Error("The HLS encoder exited before the stream was ready.");
@@ -412,7 +458,11 @@ const waitForFile = async (path, timeout = 30_000, job) => {
       const details = await stat(path);
       if (details.size) return details;
     } catch {}
-    if (job && job.child.exitCode !== null) throw hlsStartupError(job);
+    if (
+      job &&
+      (job.child.exitCode !== null || job.child.signalCode !== null)
+    )
+      throw hlsStartupError(job);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("The HLS stream did not become ready.");
@@ -435,7 +485,11 @@ const waitForPlaylist = async (
       )
         return;
     } catch {}
-    if (job && job.child.exitCode !== null) throw hlsStartupError(job);
+    if (
+      job &&
+      (job.child.exitCode !== null || job.child.signalCode !== null)
+    )
+      throw hlsStartupError(job);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("The HLS playlist did not become ready.");
@@ -634,7 +688,7 @@ const server = http.createServer(async (request, response) => {
           ...capacityWaitMetrics,
         },
         cachedBootstraps: Array.from(hlsJobs.values()).filter(
-          (job) => job.cacheable && job.child.exitCode === null,
+          (job) => job.cacheable && !playbackChildClosed(job.child),
         ).length,
         probes: probeRequests.size,
         hls: { ...hlsMetrics },
@@ -649,9 +703,20 @@ const server = http.createServer(async (request, response) => {
       // this explicit stop so that late admission cannot revive a session the
       // player has already released. Existing reservations and live jobs are
       // cancelled directly below and intentionally remain retryable.
-      if (!jobs.has(token) && !hlsJobs.has(token) && !pendingJobs.has(token))
+      if (
+        !jobs.has(token) &&
+        !hlsJobs.has(token) &&
+        !pendingJobs.has(token) &&
+        !stoppingTokenCompletions.has(token)
+      )
         rememberCancelledStartup(token);
-      await waitForStoppedJob(token);
+      if (!(await waitForStoppedJob(token)))
+        return json(
+          response,
+          202,
+          { status: "stopping" },
+          { "Retry-After": String(Math.ceil(PLAYBACK_STOP_WAIT_MS / 1_000)) },
+        );
       response.writeHead(204).end();
       return;
     }
@@ -851,19 +916,20 @@ const server = http.createServer(async (request, response) => {
           child.stderr.on("data", (chunk) => {
             if (chunk.length) job.stderrObserved = true;
           });
-          child.once("close", (code) => {
+          child.once("close", (code, signal) => {
             settlePlaybackStartup(startupKey, startupGate);
-            if (code) hlsMetrics.encoderExited += 1;
+            if (code !== 0) hlsMetrics.encoderExited += 1;
             if (code === 0 && job.nativeVod)
               hlsMetrics.nativeVodChunksCompleted += 1;
             if (code === 0 && job.nativeVodWarm)
               hlsMetrics.nativeVodWarmChunksCompleted += 1;
-            if (code && job.stderrObserved)
+            if (code !== 0 && job.stderrObserved)
               console.error("[hls] encoder exited", {
                 code,
+                signal: signal || null,
                 activeJobs: activeJobs(),
               });
-            if (code && hlsJobs.get(token) === job) {
+            if (code !== 0 && hlsJobs.get(token) === job) {
               hlsJobs.delete(token);
               jobTouched.delete(token);
               void rm(job.directory, { recursive: true, force: true });
@@ -1014,8 +1080,7 @@ const server = http.createServer(async (request, response) => {
           return json(response, 415, {
             error: "This subtitle format cannot be displayed in a web player.",
           });
-        const child = spawn(
-          ffmpeg,
+        const child = spawnPlaybackEncoder(
           [
             "-hide_banner",
             "-loglevel",
@@ -1031,7 +1096,7 @@ const server = http.createServer(async (request, response) => {
             "webvtt",
             "pipe:1",
           ],
-          { stdio: ["ignore", "pipe", "pipe"] },
+          ["ignore", "pipe", "pipe"],
         );
         subtitleJobs.add(child);
         response.writeHead(200, {
@@ -1044,8 +1109,7 @@ const server = http.createServer(async (request, response) => {
         child.once("close", () => subtitleJobs.delete(child));
         child.once("error", () => subtitleJobs.delete(child));
         response.on("close", () => {
-          if (!child.killed) child.kill("SIGKILL");
-          subtitleJobs.delete(child);
+          if (subtitleJobs.delete(child)) void stopChild(child);
         });
         return;
       } finally {
