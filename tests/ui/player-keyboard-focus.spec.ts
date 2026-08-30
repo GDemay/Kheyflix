@@ -119,6 +119,34 @@ const configureNextEpisode = (page: Page) =>
     );
   });
 
+test("opening global search moves keyboard focus to its input", async ({ page }) => {
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const openSearch = page.getByRole("button", { name: "Open search" });
+  await openSearch.focus();
+  await expect(openSearch).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/\/search$/);
+  const searchInput = page.getByLabel("Search titles");
+  await expect(searchInput).toBeVisible();
+  await expect(searchInput).toBeFocused();
+});
+
+test("direct search routes focus the title field", async ({ page }) => {
+  await page.goto("/search?q=friends", { waitUntil: "domcontentloaded" });
+
+  const searchInput = page.getByLabel("Search titles");
+  await expect(searchInput).toHaveValue("friends");
+  await expect(searchInput).toBeFocused();
+
+  await page.getByRole("button", { name: "Kheyflix home" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/search\?q=friends$/);
+  await expect(searchInput).toBeFocused();
+});
+
 test("focused player controls receive native Space and Enter activation", async ({ page }) => {
   await installSyntheticPlayback(page);
   await configurePlayableTitle(page);

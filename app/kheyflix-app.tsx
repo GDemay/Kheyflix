@@ -139,6 +139,9 @@ export function Header({
       searchInput.current.value = query;
     submittedQuery.current = query;
   }, [query]);
+  useEffect(() => {
+    if (searchOpen) searchInput.current?.focus({ preventScroll: true });
+  }, [searchOpen]);
   const submit = (value: string) => {
     if (searchInput.current) searchInput.current.value = value;
     const normalized = normalizeSearchQuery(value);
