@@ -7,6 +7,7 @@ const trackPlaybackPath =
   process.env.KHEYFLIX_TRACK_TEST_PATH ||
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
   "/stream/660270988/3/shrek-2001-multilingual";
+const safeMediaPath = (value: string) => new URL(value).pathname;
 
 test.afterEach(async ({ page }) => {
   // Release the current session before the next production playback profile
@@ -21,6 +22,7 @@ test.afterEach(async ({ page }) => {
 test("a real movie starts and keeps streaming", async ({ page }) => {
   test.setTimeout(90_000);
   let blockingPreflights = 0;
+  const mediaFailures: string[] = [];
   const playbackTelemetry: Array<Record<string, unknown>> = [];
   await page.route("**/api/playback/telemetry", async (route) => {
     try {
@@ -33,6 +35,17 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   page.on("request", (request) => {
     if (request.method() === "HEAD" && request.url().includes("/api/debrid/stream/"))
       blockingPreflights += 1;
+  });
+  page.on("response", (response) => {
+    if (
+      response.status() >= 400 &&
+      /\/api\/debrid\/(?:hls|media|stream|transcode)\//.test(response.url())
+    ) {
+      const path = safeMediaPath(response.url()),
+        method = response.request().method();
+      mediaFailures.push(`${response.status()} ${method} ${path}`);
+      console.info(`[playback] ${response.status()} ${method} ${path}`);
+    }
   });
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
@@ -100,6 +113,7 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     quality: firstFrameTelemetry.quality,
   });
   expect(blockingPreflights).toBe(0);
+  expect(mediaFailures).toEqual([]);
 
   const initial = await video.evaluate((element) => ({
     muted: element.muted,
@@ -228,6 +242,7 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     })
     .toBeGreaterThan(qualitySwitchStart + 3);
   await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(mediaFailures).toEqual([]);
   await page.goto("/", { waitUntil: "domcontentloaded" });
 });
 
