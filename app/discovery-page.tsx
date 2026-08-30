@@ -191,6 +191,14 @@ export default function DiscoveryPage({
     setSearching(true);
     setSearchCompleted(false);
     setError("");
+    // A new query is a new browsing intent. Do not leave prior releases
+    // actionable while its provider request is still resolving.
+    setResults([]);
+    setSeasonFilter("all");
+    setEpisodeFilter("all");
+    setQualityFilter("all");
+    setAudioFilter("all");
+    setSubtitleFilter("all");
     try {
       const parameters = new URLSearchParams({ q: term, kind: searchKind });
       if (searchKind === "series" && requestedSeason) parameters.set("season", requestedSeason);
@@ -236,6 +244,26 @@ export default function DiscoveryPage({
       setSearching(false);
     }
   }, [requestedEpisode, requestedSeason, searchKind]);
+
+  const switchSearchKind = (kind: "movie" | "series") => {
+    if (kind === searchKind) return;
+    // A content-type change changes the meaning of every outstanding result.
+    // Keep the typed title, but make the next search an explicit new intent.
+    const pendingSearch = searchAbortRef.current;
+    searchAbortRef.current = null;
+    pendingSearch?.abort();
+    setContextSearchPending(false);
+    setSearching(false);
+    setSearchCompleted(false);
+    setError("");
+    setResults([]);
+    clearFilters();
+    setSearchKind(kind);
+    if (kind === "movie") {
+      setRequestedSeason("");
+      setRequestedEpisode("");
+    }
+  };
 
   const search = (event: FormEvent) => {
     event.preventDefault();
@@ -425,8 +453,22 @@ export default function DiscoveryPage({
         <h1>Find it. Get it ready. Press play.</h1>
         <span>Search connected sources and prepare authorized titles for your Kheyflix library.</span>
         <div className="discovery-kind" role="group" aria-label="Content type">
-          <button type="button" className={searchKind === "movie" ? "active" : ""} onClick={() => { setSearchKind("movie"); setSearchCompleted(false); setRequestedSeason(""); setRequestedEpisode(""); }}><Film /> Movies</button>
-          <button type="button" className={searchKind === "series" ? "active" : ""} onClick={() => { setSearchKind("series"); setSearchCompleted(false); }}><Tv /> Series</button>
+          <button
+            type="button"
+            className={searchKind === "movie" ? "active" : ""}
+            aria-pressed={searchKind === "movie"}
+            onClick={() => switchSearchKind("movie")}
+          >
+            <Film /> Movies
+          </button>
+          <button
+            type="button"
+            className={searchKind === "series" ? "active" : ""}
+            aria-pressed={searchKind === "series"}
+            onClick={() => switchSearchKind("series")}
+          >
+            <Tv /> Series
+          </button>
         </div>
         <form onSubmit={search} className="discovery-search">
           <Search />
@@ -438,10 +480,10 @@ export default function DiscoveryPage({
             aria-label="Search connected sources"
           />
           <button
-            disabled={searching || query.trim().length < 2}
-            aria-label={searching ? "Searching…" : undefined}
+            disabled={query.trim().length < 2}
+            aria-label={searching ? "Search again and replace the current search" : undefined}
           >
-            {searching ? <><LoaderCircle className="spin" aria-hidden="true" /><span className="sr-only">Searching…</span></> : "Search"}
+            {searching ? <><LoaderCircle className="spin" aria-hidden="true" /><span>Search again</span></> : "Search"}
           </button>
         </form>
         {searchKind === "series" && (
