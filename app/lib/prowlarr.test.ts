@@ -11,6 +11,8 @@ afterEach(() => {
   delete process.env.PROWLARR_URL;
   delete process.env.PROWLARR_API_KEY;
   clearProwlarrHealthForTests();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -124,6 +126,163 @@ describe("Prowlarr discovery", () => {
 
     await expect(searchProwlarr("Retry Movie", { kind: "movie" })).resolves.toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels movie fallback before it can launch validation traffic", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const controller = new AbortController();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname !== "prowlarr.test")
+        throw new Error(`Unexpected validation request: ${url}`);
+      if (url.searchParams.get("categories") === "2000")
+        return Promise.resolve(Response.json([]));
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Cancelled", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const search = searchProwlarr(
+      "Candidate Movie",
+      { kind: "movie" },
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const cancelled = expect(search).rejects.toMatchObject({
+      code: "DISCOVERY_CANCELLED",
+      status: 499,
+    });
+    controller.abort();
+
+    await cancelled;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels retry backoff without leaving provider work or timers behind", async () => {
+    vi.useFakeTimers();
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(new Response("busy", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const search = searchProwlarr(
+      "Candidate Movie",
+      { kind: "movie" },
+      { signal: controller.signal },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const cancelled = expect(search).rejects.toMatchObject({
+      code: "DISCOVERY_CANCELLED",
+      status: 499,
+    });
+    controller.abort();
+
+    await cancelled;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not reset the deadline before movie fallback", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      expect(url.hostname).toBe("prowlarr.test");
+      expect(url.searchParams.get("categories")).toBe("2000");
+      now = 14_000;
+      return Promise.resolve(Response.json([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchProwlarr(
+      "Candidate Movie",
+      { kind: "movie" },
+      { timeoutMs: 14_000 },
+    )).rejects.toMatchObject({ code: "DISCOVERY_TIMEOUT", status: 504 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the Prowlarr attempt budget active while its response body is read", async () => {
+    vi.useFakeTimers();
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      providerSignal = init?.signal ?? undefined;
+      return Promise.resolve({
+        ok: true,
+        json: () => new Promise<unknown[]>(() => undefined),
+      } as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const search = searchProwlarr(
+      "Candidate Movie",
+      { kind: "movie" },
+      { signal: controller.signal },
+    );
+    const cancelled = expect(search).rejects.toMatchObject({
+      code: "DISCOVERY_CANCELLED",
+      status: 499,
+    });
+    await vi.advanceTimersByTimeAsync(7_300);
+
+    try {
+      expect(providerSignal?.aborted).toBe(true);
+    } finally {
+      controller.abort();
+      await cancelled;
+    }
+  });
+
+  it("aborts sibling TMDB validations after a terminal validation failure", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const siblingSignals: AbortSignal[] = [];
+    const fallbackReleases = [
+      "Candidate Alpha 2020 1080p WEB-DL x264",
+      "Candidate Bravo 2021 1080p WEB-DL x264",
+      "Candidate Charlie 2022 1080p WEB-DL x264",
+    ].map((title, index) => ({
+      title,
+      magnetUrl: `magnet:?xt=urn:btih:VALIDATE0${index}`,
+      categories: [{ id: 8000, name: "Other" }],
+    }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === "prowlarr.test") {
+        return Promise.resolve(
+          url.searchParams.get("categories") === "2000"
+            ? Response.json([])
+            : Response.json(fallbackReleases),
+        );
+      }
+      if (url.hostname === "www.themoviedb.org") {
+        if (url.searchParams.get("query")?.startsWith("Candidate Alpha"))
+          return Promise.resolve(new Response("Unavailable", { status: 503 }));
+        if (init?.signal) siblingSignals.push(init.signal);
+        return new Promise<Response>(() => undefined);
+      }
+      throw new Error(`Unexpected provider request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchProwlarr("Candidate", { kind: "movie" })).rejects.toMatchObject({
+      code: "MOVIE_VALIDATION_UNAVAILABLE",
+      status: 502,
+    });
+    expect(siblingSignals).toHaveLength(2);
+    expect(siblingSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it("scopes series searches to a selected season and episode", async () => {

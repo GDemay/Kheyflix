@@ -7,6 +7,8 @@ const MOVIE_VALIDATION_CONCURRENCY = 3;
 const PROWLARR_REQUEST_TIMEOUT_MS = 15_000;
 const PROWLARR_RETRY_DELAY_MS = 200;
 const PROWLARR_REQUEST_ATTEMPT_MAX_MS = 7_300;
+const MOVIE_VALIDATION_REQUEST_MAX_MS = 7_000;
+const DEFAULT_DISCOVERY_SEARCH_TIMEOUT_MS = 14_000;
 const PROWLARR_HEALTH_TIMEOUT_MS = 2_000;
 const PROWLARR_HEALTH_FRESH_MS = 60_000;
 
@@ -57,19 +59,198 @@ export type DiscoverySearchOptions = {
   episode?: number;
 };
 
-const waitForRetry = (milliseconds: number) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
+export type DiscoverySearchControl = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
 
 export const prowlarrAttemptTimeout = (
   startedAt: number,
   now = performance.now(),
+  budgetMs = PROWLARR_REQUEST_TIMEOUT_MS,
 ) => {
-  const remaining = PROWLARR_REQUEST_TIMEOUT_MS - (now - startedAt);
+  const remaining = budgetMs - (now - startedAt);
   if (remaining <= 0) return 0;
   return Math.max(
     1,
     Math.floor(Math.min(PROWLARR_REQUEST_ATTEMPT_MAX_MS, remaining)),
   );
+};
+
+type DiscoveryProviderResponse = {
+  response: Response;
+  read: <T>(body: Promise<T>) => Promise<T>;
+  release: () => void;
+};
+
+type DiscoverySearchExecution = {
+  startedAt: number;
+  timeoutMs: number;
+  signal: AbortSignal;
+  dispose: () => void;
+  remainingMs: () => number;
+  throwIfStopped: () => void;
+  wait: (milliseconds: number) => Promise<void>;
+  request: (
+    input: RequestInfo | URL,
+    init: RequestInit,
+    maximumMs: number,
+  ) => Promise<DiscoveryProviderResponse>;
+};
+
+const discoveryStopped = (cancelled: boolean) =>
+  new ProwlarrError(
+    cancelled
+      ? "Discovery search was cancelled."
+      : "Search timed out. Please try again.",
+    cancelled ? "DISCOVERY_CANCELLED" : "DISCOVERY_TIMEOUT",
+    cancelled ? 499 : 504,
+  );
+
+const normalizedSearchTimeout = (timeoutMs: number | undefined) => {
+  if (timeoutMs === undefined) return DEFAULT_DISCOVERY_SEARCH_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs)) return DEFAULT_DISCOVERY_SEARCH_TIMEOUT_MS;
+  return Math.max(0, Math.floor(timeoutMs));
+};
+
+const createDiscoverySearchExecution = (
+  control: DiscoverySearchControl,
+): DiscoverySearchExecution => {
+  const startedAt = performance.now();
+  const timeoutMs = normalizedSearchTimeout(control.timeoutMs);
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(() => deadline.abort(), timeoutMs);
+  const signal = control.signal
+    ? AbortSignal.any([control.signal, deadline.signal])
+    : deadline.signal;
+  const remainingMs = () =>
+    Math.max(0, Math.floor(timeoutMs - (performance.now() - startedAt)));
+  const stopped = () => discoveryStopped(Boolean(control.signal?.aborted));
+  const throwIfStopped = () => {
+    if (signal.aborted || remainingMs() <= 0) throw stopped();
+  };
+  const responseBody = <T>(body: Promise<T>, providerSignal?: AbortSignal) => {
+    throwIfStopped();
+    return new Promise<T>((resolve, reject) => {
+      const signals = providerSignal ? [signal, providerSignal] : [signal];
+      const finish = () => {
+        for (const candidate of signals)
+          candidate.removeEventListener("abort", abort);
+      };
+      const abort = () => {
+        finish();
+        reject(
+          signal.aborted || remainingMs() <= 0
+            ? stopped()
+            : new DOMException("Provider request timed out.", "AbortError"),
+        );
+      };
+      for (const candidate of signals)
+        candidate.addEventListener("abort", abort, { once: true });
+      body.then(
+        (value) => {
+          finish();
+          try {
+            throwIfStopped();
+            if (providerSignal?.aborted)
+              throw new DOMException("Provider request timed out.", "AbortError");
+            resolve(value);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        (error) => {
+          finish();
+          try {
+            throwIfStopped();
+          } catch (stoppedError) {
+            reject(stoppedError);
+            return;
+          }
+          reject(error);
+        },
+      );
+    });
+  };
+  const wait = (milliseconds: number) => {
+    throwIfStopped();
+    return new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+      };
+      const abort = () => {
+        finish();
+        reject(stopped());
+      };
+      const timer = setTimeout(() => {
+        finish();
+        try {
+          throwIfStopped();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      }, milliseconds);
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  };
+  const request = async (
+    input: RequestInfo | URL,
+    init: RequestInit,
+    maximumMs: number,
+  ) => {
+    throwIfStopped();
+    const providerRequest = new AbortController();
+    const requestTimer = setTimeout(
+      () => providerRequest.abort(),
+      Math.max(1, Math.min(maximumMs, remainingMs())),
+    );
+    const providerSignal = AbortSignal.any([signal, providerRequest.signal]);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      clearTimeout(requestTimer);
+      providerRequest.abort();
+    };
+    try {
+      const response = await responseBody(
+        globalThis.fetch(input, {
+          ...init,
+          signal: providerSignal,
+        }),
+        providerSignal,
+      );
+      return {
+        response,
+        read: async <T>(body: Promise<T>) => {
+          try {
+            return await responseBody(body, providerSignal);
+          } finally {
+            release();
+          }
+        },
+        release,
+      };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+  return {
+    startedAt,
+    timeoutMs,
+    signal,
+    dispose: () => {
+      clearTimeout(deadlineTimer);
+      deadline.abort();
+    },
+    remainingMs,
+    throwIfStopped,
+    wait,
+    request,
+  };
 };
 
 const configuration = () => {
@@ -195,37 +376,47 @@ const decodeHtml = (value: string) =>
 const searchMovieIdentities = async (
   title: string,
   year: number,
+  execution: DiscoverySearchExecution,
 ): Promise<MovieIdentity[]> => {
   try {
+    execution.throwIfStopped();
     const url = new URL("https://www.themoviedb.org/search/movie");
     url.searchParams.set("query", `${title} y:${year}`);
-    const response = await fetch(url, {
-      headers: { "Accept-Language": "en-US,en;q=0.9" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(7_000),
-    });
-    if (!response.ok)
-      throw new ProwlarrError(
-        "Movie validation is temporarily unavailable.",
-        "MOVIE_VALIDATION_UNAVAILABLE",
-        502,
-      );
-    const html = await response.text();
-    const identities: MovieIdentity[] = [];
-    const seen = new Set<string>();
-    const cards = html.split(/class="comp:media-card[^"]*"/i).slice(1);
-    for (const card of cards) {
-      const body = card.slice(0, 5_000);
-      const path = body.match(/data-media-type="movie"[^>]*href="(\/movie\/[^"]+)"/i)?.[1];
-      const title = decodeHtml(body.match(/<img[^>]*alt="([^"]+)"/i)?.[1] || "").trim();
-      const year = Number(
-        body.match(/class="release_date[^"]*"[^>]*>[^<]*((?:19|20)\d{2})/i)?.[1],
-      );
-      if (!path || !title || !year || seen.has(path)) continue;
-      seen.add(path);
-      identities.push({ path, title, year });
+    const provider = await execution.request(
+      url,
+      {
+        headers: { "Accept-Language": "en-US,en;q=0.9" },
+        cache: "no-store",
+      },
+      MOVIE_VALIDATION_REQUEST_MAX_MS,
+    );
+    try {
+      if (!provider.response.ok)
+        throw new ProwlarrError(
+          "Movie validation is temporarily unavailable.",
+          "MOVIE_VALIDATION_UNAVAILABLE",
+          502,
+        );
+      const html = await provider.read(provider.response.text());
+      execution.throwIfStopped();
+      const identities: MovieIdentity[] = [];
+      const seen = new Set<string>();
+      const cards = html.split(/class="comp:media-card[^"]*"/i).slice(1);
+      for (const card of cards) {
+        const body = card.slice(0, 5_000);
+        const path = body.match(/data-media-type="movie"[^>]*href="(\/movie\/[^"]+)"/i)?.[1];
+        const title = decodeHtml(body.match(/<img[^>]*alt="([^"]+)"/i)?.[1] || "").trim();
+        const year = Number(
+          body.match(/class="release_date[^"]*"[^>]*>[^<]*((?:19|20)\d{2})/i)?.[1],
+        );
+        if (!path || !title || !year || seen.has(path)) continue;
+        seen.add(path);
+        identities.push({ path, title, year });
+      }
+      return identities;
+    } finally {
+      provider.release();
     }
-    return identities;
   } catch (error) {
     if (error instanceof ProwlarrError) throw error;
     throw new ProwlarrError(
@@ -236,24 +427,36 @@ const searchMovieIdentities = async (
   }
 };
 
-const movieAliases = async (identity: MovieIdentity) => {
+const movieAliases = async (
+  identity: MovieIdentity,
+  execution: DiscoverySearchExecution,
+) => {
   if (!/^\/movie\/\d+[a-z0-9/_-]*$/i.test(identity.path)) return [];
   try {
-    const response = await fetch(`https://www.themoviedb.org${identity.path}/titles`, {
-      headers: { "Accept-Language": "en-US,en;q=0.9" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(7_000),
-    });
-    if (!response.ok)
-      throw new ProwlarrError(
-        "Movie validation is temporarily unavailable.",
-        "MOVIE_VALIDATION_UNAVAILABLE",
-        502,
-      );
-    const html = await response.text();
-    return [...html.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
-      .map((match) => decodeHtml(match[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+    execution.throwIfStopped();
+    const provider = await execution.request(
+      `https://www.themoviedb.org${identity.path}/titles`,
+      {
+        headers: { "Accept-Language": "en-US,en;q=0.9" },
+        cache: "no-store",
+      },
+      MOVIE_VALIDATION_REQUEST_MAX_MS,
+    );
+    try {
+      if (!provider.response.ok)
+        throw new ProwlarrError(
+          "Movie validation is temporarily unavailable.",
+          "MOVIE_VALIDATION_UNAVAILABLE",
+          502,
+        );
+      const html = await provider.read(provider.response.text());
+      execution.throwIfStopped();
+      return [...html.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
+        .map((match) => decodeHtml(match[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+    } finally {
+      provider.release();
+    }
   } catch (error) {
     if (error instanceof ProwlarrError) throw error;
     throw new ProwlarrError(
@@ -268,14 +471,17 @@ const matchesMovieIdentity = async (
   metadata: ReleaseMetadata,
   identities: MovieIdentity[],
   aliasesFor: (identity: MovieIdentity) => Promise<string[]>,
+  execution: DiscoverySearchExecution,
 ) => {
   if (!metadata.year) return false;
   const releaseTitle = normalizeIdentity(metadata.displayTitle);
   for (const identity of identities) {
+    execution.throwIfStopped();
     if (identity.year !== metadata.year) continue;
     const movieTitle = normalizeIdentity(identity.title);
     if (releaseTitle === movieTitle) return true;
     const aliases = await aliasesFor(identity);
+    execution.throwIfStopped();
     if (aliases.some((alias) => normalizeIdentity(alias) === releaseTitle)) return true;
   }
   return false;
@@ -301,7 +507,10 @@ const isFallbackMovieCandidate = (
   );
 };
 
-const validateFallbackMovies = async (releases: ProwlarrRelease[]) => {
+const validateFallbackMovies = async (
+  releases: ProwlarrRelease[],
+  execution: DiscoverySearchExecution,
+) => {
   const unique = new Map<string, ReleaseMetadata>();
   for (const release of [...releases].sort(
     (a, b) => Math.max(0, Number(b.seeders) || 0) - Math.max(0, Number(a.seeders) || 0),
@@ -320,145 +529,178 @@ const validateFallbackMovies = async (releases: ProwlarrRelease[]) => {
     MAX_MOVIE_VALIDATION_REQUESTS - entries.length,
   );
   const aliasesFor = (identity: MovieIdentity) => {
+    execution.throwIfStopped();
     if (!aliasRequests.has(identity.path)) {
       if (remainingAliasRequests <= 0) return Promise.resolve([]);
       remainingAliasRequests -= 1;
-      aliasRequests.set(identity.path, movieAliases(identity));
+      aliasRequests.set(identity.path, movieAliases(identity, execution));
     }
     return aliasRequests.get(identity.path)!;
   };
   for (let offset = 0; offset < entries.length; offset += MOVIE_VALIDATION_CONCURRENCY) {
+    execution.throwIfStopped();
     const batch = entries.slice(offset, offset + MOVIE_VALIDATION_CONCURRENCY);
     const results = await Promise.all(batch.map(async ([key, metadata]) => ({
       key,
       matches: await matchesMovieIdentity(
         metadata,
-        await searchMovieIdentities(metadata.displayTitle, metadata.year!),
+        await searchMovieIdentities(metadata.displayTitle, metadata.year!, execution),
         aliasesFor,
+        execution,
       ),
     })));
+    execution.throwIfStopped();
     for (const result of results) if (result.matches) verified.add(result.key);
   }
   return verified;
 };
 
-export async function searchProwlarr(query: string, options: DiscoverySearchOptions = {}): Promise<DiscoveryResult[]> {
+export async function searchProwlarr(
+  query: string,
+  options: DiscoverySearchOptions = {},
+  control: DiscoverySearchControl = {},
+): Promise<DiscoveryResult[]> {
   const term = query.trim().replace(/\s+/g, " ").slice(0, 120);
   if (term.length < 2) return [];
-  const { baseUrl, apiKey } = configuration();
-  const url = new URL(`${baseUrl}/api/v1/search`);
-  const season = options.kind === "series" && Number.isInteger(options.season) && Number(options.season) > 0
-    ? Math.min(99, Number(options.season)) : undefined;
-  const episode = season && Number.isInteger(options.episode) && Number(options.episode) > 0
-    ? Math.min(999, Number(options.episode)) : undefined;
-  const episodeSuffix = season ? ` S${String(season).padStart(2, "0")}${episode ? `E${String(episode).padStart(2, "0")}` : ""}` : "";
-  url.searchParams.set("query", `${term}${episodeSuffix}`);
-  url.searchParams.set("type", "search");
-  url.searchParams.set("limit", String(DEFAULT_LIMIT));
-  if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
-  const requestReleases = async (requestUrl: URL) => {
-    const startedAt = performance.now();
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const timeout = prowlarrAttemptTimeout(startedAt);
-      if (!timeout) break;
-      try {
-        const response = await fetch(requestUrl, {
-          headers: { "X-Api-Key": apiKey, Accept: "application/json" },
-          cache: "no-store",
-          // Each signal shares one deadline rather than allowing two full
-          // request windows plus a retry delay to exceed the UX budget.
-          signal: AbortSignal.timeout(timeout),
-        });
-        if (response.ok) return (await response.json()) as ProwlarrRelease[];
-        const unauthorized = response.status === 401 || response.status === 403,
-          transient = response.status === 429 || response.status >= 500;
-        if (
-          transient &&
-          attempt === 0 &&
-          prowlarrAttemptTimeout(startedAt) > PROWLARR_RETRY_DELAY_MS
-        ) {
-          await waitForRetry(PROWLARR_RETRY_DELAY_MS);
-          continue;
-        }
-        throw new ProwlarrError(
-          unauthorized
-            ? "Discovery credentials were rejected."
-            : "Discovery is temporarily unavailable.",
-          unauthorized ? "PROWLARR_UNAUTHORIZED" : "PROWLARR_UNAVAILABLE",
-          unauthorized ? 503 : 502,
+  const execution = createDiscoverySearchExecution(control);
+  try {
+    execution.throwIfStopped();
+    const { baseUrl, apiKey } = configuration();
+    const url = new URL(`${baseUrl}/api/v1/search`);
+    const season = options.kind === "series" && Number.isInteger(options.season) && Number(options.season) > 0
+      ? Math.min(99, Number(options.season)) : undefined;
+    const episode = season && Number.isInteger(options.episode) && Number(options.episode) > 0
+      ? Math.min(999, Number(options.episode)) : undefined;
+    const episodeSuffix = season ? ` S${String(season).padStart(2, "0")}${episode ? `E${String(episode).padStart(2, "0")}` : ""}` : "";
+    url.searchParams.set("query", `${term}${episodeSuffix}`);
+    url.searchParams.set("type", "search");
+    url.searchParams.set("limit", String(DEFAULT_LIMIT));
+    if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
+    const requestReleases = async (requestUrl: URL) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        execution.throwIfStopped();
+        const timeout = prowlarrAttemptTimeout(
+          execution.startedAt,
+          performance.now(),
+          execution.timeoutMs,
         );
-      } catch (error) {
-        if (error instanceof ProwlarrError) throw error;
-        if (
-          attempt === 0 &&
-          prowlarrAttemptTimeout(startedAt) > PROWLARR_RETRY_DELAY_MS
-        ) {
-          await waitForRetry(PROWLARR_RETRY_DELAY_MS);
-          continue;
+        if (!timeout) break;
+        try {
+          const provider = await execution.request(
+            requestUrl,
+            {
+              headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+              cache: "no-store",
+            },
+            timeout,
+          );
+          try {
+            if (provider.response.ok)
+              return await provider.read(provider.response.json()) as ProwlarrRelease[];
+            const unauthorized = provider.response.status === 401 || provider.response.status === 403,
+              transient = provider.response.status === 429 || provider.response.status >= 500;
+            if (
+              transient &&
+              attempt === 0 &&
+              execution.remainingMs() > PROWLARR_RETRY_DELAY_MS
+            ) {
+              provider.release();
+              await execution.wait(PROWLARR_RETRY_DELAY_MS);
+              continue;
+            }
+            throw new ProwlarrError(
+              unauthorized
+                ? "Discovery credentials were rejected."
+                : "Discovery is temporarily unavailable.",
+              unauthorized ? "PROWLARR_UNAUTHORIZED" : "PROWLARR_UNAVAILABLE",
+              unauthorized ? 503 : 502,
+            );
+          } finally {
+            provider.release();
+          }
+        } catch (error) {
+          if (error instanceof ProwlarrError) throw error;
+          execution.throwIfStopped();
+          if (
+            attempt === 0 &&
+            execution.remainingMs() > PROWLARR_RETRY_DELAY_MS
+          ) {
+            await execution.wait(PROWLARR_RETRY_DELAY_MS);
+            continue;
+          }
         }
       }
-    }
-    throw new ProwlarrError(
-      "Discovery is temporarily unavailable.",
-      "PROWLARR_UNAVAILABLE",
-      502,
-    );
-  };
-  const seen = new Set<string>();
-  const normalize = async (
-    releases: ProwlarrRelease[],
-    verifiedFallbackMovies?: Set<string>,
-  ) => {
-    const normalized = await Promise.all(releases.map(async (release): Promise<DiscoveryResult | null> => {
-      const magnet = [release.magnetUrl, release.guid].find((value) =>
-        /^magnet:\?xt=urn:btih:[a-z0-9]+/i.test(value || ""),
+      execution.throwIfStopped();
+      throw new ProwlarrError(
+        "Discovery is temporarily unavailable.",
+        "PROWLARR_UNAVAILABLE",
+        502,
       );
-      const title = release.title?.trim();
-      if (!magnet || !title) return null;
-      const metadata = parseReleaseTitle(title);
-      const inferredCategory = categoryFor(release);
-      if (verifiedFallbackMovies && options.kind === "movie") {
-        if (
-          !isFallbackMovieCandidate(release, metadata) ||
-          !verifiedFallbackMovies.has(fallbackMovieKey(metadata))
+    };
+    const seen = new Set<string>();
+    const normalize = async (
+      releases: ProwlarrRelease[],
+      verifiedFallbackMovies?: Set<string>,
+    ) => {
+      const normalized = await Promise.all(releases.map(async (release): Promise<DiscoveryResult | null> => {
+        execution.throwIfStopped();
+        const magnet = [release.magnetUrl, release.guid].find((value) =>
+          /^magnet:\?xt=urn:btih:[a-z0-9]+/i.test(value || ""),
+        );
+        const title = release.title?.trim();
+        if (!magnet || !title) return null;
+        const metadata = parseReleaseTitle(title);
+        const inferredCategory = categoryFor(release);
+        if (verifiedFallbackMovies && options.kind === "movie") {
+          if (
+            !isFallbackMovieCandidate(release, metadata) ||
+            !verifiedFallbackMovies.has(fallbackMovieKey(metadata))
+          ) return null;
+        } else if (
+          options.kind &&
+          release.categories?.length &&
+          inferredCategory !== options.kind
         ) return null;
-      } else if (
-        options.kind &&
-        release.categories?.length &&
-        inferredCategory !== options.kind
-      ) return null;
-      const category = options.kind || inferredCategory;
-      if (category === "movie" && explicitlyRequiresCompatibility(title)) return null;
-      if (season && metadata.season !== season) return null;
-      if (episode && (metadata.episode === undefined || episode < metadata.episode || episode > (metadata.episodeEnd || metadata.episode))) return null;
-      const id = stableId(magnet);
-      if (!id || seen.has(id)) return null;
-      seen.add(id);
-      return {
-        id,
-        title,
-        size: Number(release.size) || 0,
-        seeders: Math.max(0, Number(release.seeders) || 0),
-        peers: Math.max(0, Number(release.peers) || 0),
-        source: release.indexer || "Kheyflix discovery",
-        publishedAt: release.publishDate,
-        category,
-        magnet,
-        metadata,
-      };
-    }));
-    return normalized
-    .filter((result): result is DiscoveryResult => result !== null)
-    .sort((a, b) => b.seeders - a.seeders || a.title.localeCompare(b.title))
-    .slice(0, DEFAULT_LIMIT);
-  };
+        const category = options.kind || inferredCategory;
+        if (category === "movie" && explicitlyRequiresCompatibility(title)) return null;
+        if (season && metadata.season !== season) return null;
+        if (episode && (metadata.episode === undefined || episode < metadata.episode || episode > (metadata.episodeEnd || metadata.episode))) return null;
+        const id = stableId(magnet);
+        if (!id || seen.has(id)) return null;
+        seen.add(id);
+        return {
+          id,
+          title,
+          size: Number(release.size) || 0,
+          seeders: Math.max(0, Number(release.seeders) || 0),
+          peers: Math.max(0, Number(release.peers) || 0),
+          source: release.indexer || "Kheyflix discovery",
+          publishedAt: release.publishDate,
+          category,
+          magnet,
+          metadata,
+        };
+      }));
+      execution.throwIfStopped();
+      return normalized
+      .filter((result): result is DiscoveryResult => result !== null)
+      .sort((a, b) => b.seeders - a.seeders || a.title.localeCompare(b.title))
+      .slice(0, DEFAULT_LIMIT);
+    };
 
-  const scopedResults = await normalize(await requestReleases(url));
-  if (scopedResults.length || options.kind !== "movie") return scopedResults;
+    const scopedResults = await normalize(await requestReleases(url));
+    execution.throwIfStopped();
+    if (scopedResults.length || options.kind !== "movie") return scopedResults;
 
-  const fallbackUrl = new URL(url);
-  fallbackUrl.searchParams.delete("categories");
-  const fallbackReleases = await requestReleases(fallbackUrl);
-  if (!fallbackReleases.length) return [];
-  return normalize(fallbackReleases, await validateFallbackMovies(fallbackReleases));
+    const fallbackUrl = new URL(url);
+    fallbackUrl.searchParams.delete("categories");
+    const fallbackReleases = await requestReleases(fallbackUrl);
+    execution.throwIfStopped();
+    if (!fallbackReleases.length) return [];
+    const verifiedFallbackMovies = await validateFallbackMovies(fallbackReleases, execution);
+    execution.throwIfStopped();
+    return await normalize(fallbackReleases, verifiedFallbackMovies);
+  } finally {
+    execution.dispose();
+  }
 }

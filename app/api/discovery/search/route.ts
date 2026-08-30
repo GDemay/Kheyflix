@@ -13,11 +13,15 @@ const handleGet = async (request: Request) => {
     const episode = Number(parameters.get("episode"));
     if (query.trim().length < 2)
       return Response.json({ results: [] }, { headers: { "Cache-Control": "no-store" } });
-    const results = await searchProwlarr(query, {
+    const results = await searchProwlarr(
+      query,
+      {
         kind: kind === "movie" || kind === "series" ? kind : undefined,
         season: Number.isInteger(season) && season > 0 ? season : undefined,
         episode: Number.isInteger(episode) && episode > 0 ? episode : undefined,
-      });
+      },
+      { signal: request.signal },
+    );
     writeRequestLog("info", "discovery.search.completed", request, {
       kind: kind === "movie" || kind === "series" ? kind : "all",
       resultCount: results.length,
@@ -31,11 +35,18 @@ const handleGet = async (request: Request) => {
       error instanceof ProwlarrError
         ? error
         : new ProwlarrError("Discovery is temporarily unavailable.");
-    writeRequestLog("error", "discovery.search.failed", request, {
-      error: error instanceof Error ? error : new Error(String(error)),
-      code: known.code,
-      status: known.status,
-    });
+    writeRequestLog(
+      known.code === "DISCOVERY_CANCELLED" ? "debug" : "error",
+      known.code === "DISCOVERY_CANCELLED"
+        ? "discovery.search.cancelled"
+        : "discovery.search.failed",
+      request,
+      {
+        error: error instanceof Error ? error : new Error(String(error)),
+        code: known.code,
+        status: known.status,
+      },
+    );
     return Response.json(
       { error: { code: known.code, message: known.message } },
       { status: known.status },
