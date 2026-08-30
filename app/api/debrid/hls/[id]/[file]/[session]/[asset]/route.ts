@@ -72,6 +72,10 @@ const handleGet = async (
       void cancelReader(request.signal.reason);
     };
     request.signal.addEventListener("abort", abortReader, { once: true });
+    // AbortSignal does not replay an abort to listeners attached after it
+    // fired. Fetch can settle in the same turn as a client disconnect, so
+    // close that narrow handoff window before exposing the relay body.
+    if (request.signal.aborted) abortReader();
     const cleanupAbort = () =>
       request.signal.removeEventListener("abort", abortReader);
     const body = new ReadableStream<Uint8Array>({
