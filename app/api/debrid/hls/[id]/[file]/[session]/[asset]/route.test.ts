@@ -207,6 +207,42 @@ describe("iPhone-compatible HLS gateway", () => {
     await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
   });
 
+  it("cancels the upstream body when the client aborts as fetch resolves", async () => {
+    process.env.KHEYFLIX_TRANSCODER_URL = "http://transcoder.test";
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => undefined);
+      },
+      cancel,
+    });
+    let resolveFetch!: (response: Response) => void;
+    const fetchReady = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(fetchReady);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = GET(
+      new Request(
+        "https://kheyflix.test/api/debrid/hls/42/0/session-42/segment00000.ts?quality=480",
+        { signal: controller.signal },
+      ),
+      { params: Promise.resolve({ ...await context.params, asset: "segment00000.ts" }) },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    resolveFetch(
+      new Response(upstreamBody, {
+        headers: { "content-type": "video/mp2t" },
+      }),
+    );
+    controller.abort(new DOMException("The request was aborted.", "AbortError"));
+
+    await response;
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+  });
+
   it("preserves the bounded retry contract from the transcoder", async () => {
     process.env.KHEYFLIX_TRANSCODER_URL = "http://transcoder.test";
     vi.stubGlobal(

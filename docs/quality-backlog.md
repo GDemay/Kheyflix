@@ -16,6 +16,7 @@ This living backlog is evidence-driven. Items move only after a reproduced defec
 4. **Native Apple adaptive quality:** Auto deliberately preserves the proven 480p native-HLS session because replacing a live single-variant playlist interrupts Safari. Build a true multi-variant HLS manifest before re-enabling seamless automatic Apple quality upgrades.
 5. **Provider resilience under real outage:** Retry classification, `Retry-After`, cancellation propagation, resolver deadlines, link refresh, preparation durability, and operation timing have focused regression coverage. Continue validating error copy and recovery behavior against non-destructive real-provider failures after release.
 6. **Production observability retention:** The release adds safe operation timing and playback diagnostics. Establish retention, alert thresholds, and a privacy-reviewed aggregation path before treating the data as an operational SLO.
+7. **HLS client-abort handoff:** A browser disconnect can land exactly as the transcoder fetch resolves, before the relay body installs its abort listener. The route now closes that handoff with an immediate signal-state check and an idempotent reader cancellation; the focused reproduction is covered locally. Exact-release production verification remains required.
 
 ## Resolved / verified policy work
 
