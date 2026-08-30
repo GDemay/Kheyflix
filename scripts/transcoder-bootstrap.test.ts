@@ -14,6 +14,18 @@ const diagnostics = new Map<string, { stderr: string }>();
 const wait = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const waitForPath = async (path: string, timeout = 5_000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      return await stat(path);
+    } catch {
+      await wait(25);
+    }
+  }
+  return stat(path);
+};
+
 const listen = (server: Server) =>
   new Promise<number>((resolve, reject) => {
     server.once("error", reject);
@@ -253,6 +265,145 @@ describe("bootstrap transcoder lifecycle", () => {
     const admitted = await fetch(`${endpoint}/transcode/42/0?token=bootstrap-three&quality=bootstrap`);
     expect(admitted.status).toBe(200);
     await admitted.body?.getReader().read();
+    await firstReader?.cancel();
+    await secondReader?.cancel();
+  }, 15_000);
+
+  test("waits for an explicit stop that is still closing before admitting its replacement", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const closeMarker = join(directory, "closing-child-finished");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(`setTimeout(() => { require('node:fs').writeFileSync(${JSON.stringify(closeMarker)}, 'closed'); process.exit(0); }, 650)`)}], { stdio: 'inherit' }); process.stdout.write('stream-bytes'); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const first = await fetch(
+      `${endpoint}/transcode/42/0?token=closing-bootstrap&quality=bootstrap`,
+    );
+    const second = await fetch(
+      `${endpoint}/transcode/42/0?token=active-bootstrap&quality=bootstrap`,
+    );
+    const firstReader = first.body?.getReader();
+    const secondReader = second.body?.getReader();
+    await firstReader?.read();
+    await secondReader?.read();
+
+    const stop = fetch(`${endpoint}/stop/closing-bootstrap`, { method: "POST" });
+    const stopDeadline = Date.now() + 1_000;
+    let stopping;
+    while (Date.now() < stopDeadline) {
+      stopping = await (await fetch(`${endpoint}/health`)).json();
+      if (stopping.capacity.stopping === 1) break;
+      await wait(25);
+    }
+    expect(stopping.capacity).toMatchObject({
+      activeTranscodes: 1,
+      inUse: 2,
+      stopping: 1,
+    });
+    await expect(stat(closeMarker)).rejects.toThrow();
+
+    const replacement = await fetch(
+      `${endpoint}/transcode/42/0?token=next-bootstrap&quality=bootstrap`,
+    );
+
+    expect(replacement.status).toBe(200);
+    await expect(waitForPath(closeMarker)).resolves.toBeDefined();
+    const replacementReader = replacement.body?.getReader();
+    await replacementReader?.read();
+    expect((await stop).status).toBe(204);
+    const health = await (await fetch(`${endpoint}/health`)).json();
+    expect(health.capacity).toMatchObject({
+      activeTranscodes: 2,
+      rejected: 0,
+      stopping: 0,
+    });
+    await replacementReader?.cancel();
+    await firstReader?.cancel();
+    await secondReader?.cancel();
+  }, 15_000);
+
+  test("returns a retryable busy response when an explicit stop exceeds the admission wait", async () => {
+    const app = createServer((_request, response) => response.writeHead(200).end());
+    servers.push(app);
+    const appPort = await listen(app);
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-transcoder-test-"));
+    directories.push(directory);
+    const closeMarker = join(directory, "long-closing-child-finished");
+    const ffmpeg = await executable(
+      directory,
+      "ffmpeg",
+      `#!/usr/bin/env node\nconst { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(`setTimeout(() => { require('node:fs').writeFileSync(${JSON.stringify(closeMarker)}, 'closed'); process.exit(0); }, 4000)`)}], { stdio: 'inherit' }); process.stdout.write('stream-bytes'); setInterval(() => {}, 1000);\n`,
+    );
+    const ffprobe = await executable(
+      directory,
+      "ffprobe",
+      "#!/usr/bin/env node\nprocess.stderr.write('unexpected media probe'); process.exit(91);\n",
+    );
+    const endpoint = await startTranscoder(
+      `http://127.0.0.1:${appPort}`,
+      ffmpeg,
+      ffprobe,
+    );
+
+    const first = await fetch(
+      `${endpoint}/transcode/42/0?token=long-closing-bootstrap&quality=bootstrap`,
+    );
+    const second = await fetch(
+      `${endpoint}/transcode/42/0?token=active-bootstrap&quality=bootstrap`,
+    );
+    const firstReader = first.body?.getReader();
+    const secondReader = second.body?.getReader();
+    await firstReader?.read();
+    await secondReader?.read();
+
+    const stop = fetch(`${endpoint}/stop/long-closing-bootstrap`, { method: "POST" });
+    const stopDeadline = Date.now() + 1_000;
+    let stopping;
+    while (Date.now() < stopDeadline) {
+      stopping = await (await fetch(`${endpoint}/health`)).json();
+      if (stopping.capacity.stopping === 1) break;
+      await wait(25);
+    }
+    expect(stopping.capacity.stopping).toBe(1);
+
+    const requestedAt = Date.now();
+    const replacement = await fetch(
+      `${endpoint}/transcode/42/0?token=timed-out-bootstrap&quality=bootstrap`,
+    );
+
+    expect(replacement.status).toBe(429);
+    expect(replacement.headers.get("retry-after")).toBe("2");
+    expect(Date.now() - requestedAt).toBeGreaterThanOrEqual(1_700);
+    const health = await (await fetch(`${endpoint}/health`)).json();
+    expect(health.capacity).toMatchObject({
+      inUse: 2,
+      rejected: 1,
+      stopping: 1,
+    });
+    await expect(waitForPath(closeMarker)).resolves.toBeDefined();
+    expect((await stop).status).toBe(204);
+
+    const admitted = await fetch(
+      `${endpoint}/transcode/42/0?token=after-timeout-bootstrap&quality=bootstrap`,
+    );
+    expect(admitted.status).toBe(200);
+    await admitted.body?.getReader().cancel();
     await firstReader?.cancel();
     await secondReader?.cancel();
   }, 15_000);
