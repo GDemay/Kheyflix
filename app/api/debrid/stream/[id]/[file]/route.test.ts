@@ -175,27 +175,38 @@ describe('direct debrid streaming',()=>{
   });
 
   it('bounds initial AllDebrid resolution within the one startup budget',async()=>{
-    process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='250';
-    let resolverSignal:AbortSignal|undefined;
-    resolveVideo.mockImplementation((...args:unknown[])=>{
-      const options=args[4] as {signal?:AbortSignal}|undefined;
-      if(!options?.signal)return Promise.reject(new Error('startup signal was not forwarded'));
-      resolverSignal=options.signal;
-      return new Promise((_resolve,reject)=>{
-        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='250';
+      let resolverSignal:AbortSignal|undefined;
+      let resolutionStarted:()=>void;
+      const started=new Promise<void>((resolve)=>{resolutionStarted=resolve;});
+      resolveVideo.mockImplementation((...args:unknown[])=>{
+        const options=args[4] as {signal?:AbortSignal}|undefined;
+        if(!options?.signal)return Promise.reject(new Error('startup signal was not forwarded'));
+        resolverSignal=options.signal;
+        resolutionStarted();
+        return new Promise((_resolve,reject)=>{
+          options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+        });
       });
-    });
-    const fetchMock=vi.fn();
-    vi.stubGlobal('fetch',fetchMock);
+      const fetchMock=vi.fn();
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await started;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(resolveVideo).toHaveBeenCalledWith(42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
-    expect(resolverSignal?.aborted).toBe(true);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(resolveVideo).toHaveBeenCalledWith(42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
+      expect(resolverSignal?.aborted).toBe(true);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns 499 when the viewer leaves during initial AllDebrid resolution',async()=>{
