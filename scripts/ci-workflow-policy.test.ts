@@ -23,6 +23,15 @@ describe("CI workflow concurrency", () => {
     );
   });
 
+  it("uses Node 24-capable checkout and setup runtimes in every job", () => {
+    expect(
+      workflow.match(/uses: actions\/checkout@v(?:[5-9]|[1-9]\d+)\b/g) ?? [],
+    ).toHaveLength(2);
+    expect(
+      workflow.match(/uses: actions\/setup-node@v(?:[5-9]|[1-9]\d+)\b/g) ?? [],
+    ).toHaveLength(2);
+  });
+
   it("keeps provider-failure and player-preference regressions in the PR smoke gate", () => {
     const packageJson = readFileSync("package.json", "utf8");
 
