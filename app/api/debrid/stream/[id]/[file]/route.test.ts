@@ -118,36 +118,50 @@ describe('direct debrid streaming',()=>{
   });
 
   it('bounds a stalled direct-mode DNS preflight and cancels its resolver',async()=>{
-    process.env.KHEYFLIX_STREAM_MODE='direct';
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    let resolveLookup:(addresses:Array<{address:string;family:number}>)=>void;
-    lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
-      resolveLookup=resolve;
-    }));
-    const fetchMock=vi.fn();
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_MODE='direct';
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      let resolveLookup:(addresses:Array<{address:string;family:number}>)=>void;
+      let lookupStarted:()=>void;
+      const started=new Promise<void>((resolve)=>{lookupStarted=resolve;});
+      lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
+        resolveLookup=resolve;
+        lookupStarted();
+      }));
+      const fetchMock=vi.fn();
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await started;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(response.headers.get('location')).toBeNull();
-    expect(resolveVideo).toHaveBeenCalledTimes(1);
-    expect(lookup).toHaveBeenCalledTimes(1);
-    expect(resolverCancel).toHaveBeenCalledTimes(1);
-    expect(fetchMock).not.toHaveBeenCalled();
-    resolveLookup!([{address:'8.8.8.8',family:4}]);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(response.headers.get('location')).toBeNull();
+      expect(resolveVideo).toHaveBeenCalledTimes(1);
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(resolverCancel).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+      resolveLookup!([{address:'8.8.8.8',family:4}]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cancels a stalled direct-mode DNS preflight when the viewer leaves',async()=>{
     process.env.KHEYFLIX_STREAM_MODE='direct';
     process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
     let resolveLookup:(addresses:Array<{address:string;family:number}>)=>void;
+    let lookupStarted:()=>void;
+    const started=new Promise<void>((resolve)=>{lookupStarted=resolve;});
     lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
       resolveLookup=resolve;
+      lookupStarted();
     }));
     const client=new AbortController();
     const fetchMock=vi.fn();
@@ -156,7 +170,7 @@ describe('direct debrid streaming',()=>{
       new Request('https://kheyflix.test/api/debrid/stream/42/0',{signal:client.signal}),
       context,
     );
-    await vi.waitFor(()=>expect(lookup).toHaveBeenCalledTimes(1));
+    await started;
     client.abort();
 
     const response=await pending;
@@ -212,10 +226,13 @@ describe('direct debrid streaming',()=>{
   it('returns 499 when the viewer leaves during initial AllDebrid resolution',async()=>{
     process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='1000';
     let resolverSignal:AbortSignal|undefined;
+    let resolutionStarted:()=>void;
+    const started=new Promise<void>((resolve)=>{resolutionStarted=resolve;});
     resolveVideo.mockImplementation((...args:unknown[])=>{
       const options=args[4] as {signal?:AbortSignal}|undefined;
       if(!options?.signal)return Promise.reject(new Error('startup signal was not forwarded'));
       resolverSignal=options.signal;
+      resolutionStarted();
       return new Promise((_resolve,reject)=>{
         options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
       });
@@ -224,7 +241,7 @@ describe('direct debrid streaming',()=>{
     const fetchMock=vi.fn();
     vi.stubGlobal('fetch',fetchMock);
     const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0',{signal:client.signal}),context);
-    await vi.waitFor(()=>expect(resolveVideo).toHaveBeenCalledTimes(1));
+    await started;
     client.abort();
 
     const response=await pending;
@@ -237,50 +254,77 @@ describe('direct debrid streaming',()=>{
   });
 
   it('does not reset the startup budget while a stale link is being recovered',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='500';
-    let refreshSignal:AbortSignal|undefined;
-    resolveVideo.mockImplementation((...args:unknown[])=>{
-      const refresh=args[3]===true;
-      const options=args[4] as {signal?:AbortSignal}|undefined;
-      if(!refresh)return Promise.resolve({url:'https://cdn.test/signed/stale.mp4',name:'Movie.mp4',size:4096});
-      if(!options?.signal)return Promise.reject(new Error('startup signal was not forwarded'));
-      refreshSignal=options.signal;
-      return new Promise((_resolve,reject)=>{
-        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='500';
+      let refreshSignal:AbortSignal|undefined;
+      let refreshStarted:()=>void;
+      const refreshBegan=new Promise<void>((resolve)=>{refreshStarted=resolve;});
+      resolveVideo.mockImplementation((...args:unknown[])=>{
+        const refresh=args[3]===true;
+        const options=args[4] as {signal?:AbortSignal}|undefined;
+        if(!refresh)return Promise.resolve({url:'https://cdn.test/signed/stale.mp4',name:'Movie.mp4',size:4096});
+        if(!options?.signal)return Promise.reject(new Error('startup signal was not forwarded'));
+        refreshSignal=options.signal;
+        refreshStarted();
+        return new Promise((_resolve,reject)=>{
+          options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+        });
       });
-    });
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
-      options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
-    }));
-    vi.stubGlobal('fetch',fetchMock);
+      let fetchStarted:()=>void;
+      const firstFetchBegan=new Promise<void>((resolve)=>{fetchStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
+        fetchStarted();
+        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+      }));
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await firstFetchBegan;
+      await vi.advanceTimersByTimeAsync(250);
+      await refreshBegan;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(resolveVideo).toHaveBeenNthCalledWith(1,42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
-    expect(resolveVideo).toHaveBeenNthCalledWith(2,42,0,undefined,true,expect.objectContaining({signal:expect.any(AbortSignal)}));
-    expect(refreshSignal?.aborted).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(resolveVideo).toHaveBeenNthCalledWith(1,42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
+      expect(resolveVideo).toHaveBeenNthCalledWith(2,42,0,undefined,true,expect.objectContaining({signal:expect.any(AbortSignal)}));
+      expect(refreshSignal?.aborted).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not wait past the startup deadline for a failed provider body that never cancels',async()=>{
-    process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='250';
-    const stalledCleanup=new ReadableStream<Uint8Array>({
-      cancel() {
-        return new Promise<void>(()=>{});
-      },
-    });
-    const fetchMock=vi.fn().mockResolvedValue(new Response(stalledCleanup,{status:503}));
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_STARTUP_TIMEOUT_MS='250';
+      let cleanupStarted:()=>void;
+      const cleanupBegan=new Promise<void>((resolve)=>{cleanupStarted=resolve;});
+      const stalledCleanup=new ReadableStream<Uint8Array>({
+        cancel() {
+          cleanupStarted();
+          return new Promise<void>(()=>{});
+        },
+      });
+      const fetchMock=vi.fn().mockResolvedValue(new Response(stalledCleanup,{status:503}));
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await cleanupBegan;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(resolveVideo).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(resolveVideo).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not start DNS or provider work in the deadline-boundary microtask',async()=>{
@@ -379,66 +423,94 @@ describe('direct debrid streaming',()=>{
   });
 
   it('refreshes the signed link once when the provider is slow before the first byte',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    resolveVideo
-      .mockResolvedValueOnce({url:'https://cdn.test/signed/slow.mp4',name:'Movie.mp4',size:4096})
-      .mockResolvedValueOnce({url:'https://cdn.test/signed/fresh.mp4',name:'Movie.mp4',size:4096});
-    let attempts=0;
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
-      attempts+=1;
-      if(attempts===1)return new Promise<Response>((_resolve,reject)=>{
-        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      resolveVideo
+        .mockResolvedValueOnce({url:'https://cdn.test/signed/slow.mp4',name:'Movie.mp4',size:4096})
+        .mockResolvedValueOnce({url:'https://cdn.test/signed/fresh.mp4',name:'Movie.mp4',size:4096});
+      let attempts=0;
+      let firstFetchStarted:()=>void;
+      const started=new Promise<void>((resolve)=>{firstFetchStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
+        attempts+=1;
+        if(attempts===1)return new Promise<Response>((_resolve,reject)=>{
+          firstFetchStarted();
+          options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+        });
+        return Promise.resolve(new Response('fresh-data',{status:206,headers:{'content-type':'video/mp4','content-range':'bytes 20-4095/4096'}}));
       });
-      return Promise.resolve(new Response('fresh-data',{status:206,headers:{'content-type':'video/mp4','content-range':'bytes 20-4095/4096'}}));
-    });
-    vi.stubGlobal('fetch',fetchMock);
-    const request=new Request('https://kheyflix.test/api/debrid/stream/42/0',{headers:{range:'bytes=20-'}});
+      vi.stubGlobal('fetch',fetchMock);
+      const request=new Request('https://kheyflix.test/api/debrid/stream/42/0',{headers:{range:'bytes=20-'}});
 
-    const response=await GET(request,context);
+      const pending=GET(request,context);
+      await started;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(206);
-    expect(await response.text()).toBe('fresh-data');
-    expect(resolveVideo).toHaveBeenNthCalledWith(1,42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
-    expect(resolveVideo).toHaveBeenNthCalledWith(2,42,0,undefined,true,expect.objectContaining({signal:expect.any(AbortSignal)}));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toEqual({'Accept-Encoding':'identity',Range:'bytes=20-'});
-    expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toEqual({'Accept-Encoding':'identity',Range:'bytes=20-'});
+      expect(response.status).toBe(206);
+      expect(await response.text()).toBe('fresh-data');
+      expect(resolveVideo).toHaveBeenNthCalledWith(1,42,0,undefined,false,expect.objectContaining({signal:expect.any(AbortSignal)}));
+      expect(resolveVideo).toHaveBeenNthCalledWith(2,42,0,undefined,true,expect.objectContaining({signal:expect.any(AbortSignal)}));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toEqual({'Accept-Encoding':'identity',Range:'bytes=20-'});
+      expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toEqual({'Accept-Encoding':'identity',Range:'bytes=20-'});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('retries when headers arrive but the provider body stalls before a media byte',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    resolveVideo
-      .mockResolvedValueOnce({url:'https://cdn.test/signed/stalled.mp4',name:'Movie.mp4',size:4096})
-      .mockResolvedValueOnce({url:'https://cdn.test/signed/recovered.mp4',name:'Movie.mp4',size:4096});
-    let attempts=0;
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
-      attempts+=1;
-      if(attempts===1)return Promise.resolve(new Response(new ReadableStream({
-        start(controller) {
-          options.signal?.addEventListener('abort',()=>controller.error(new DOMException('aborted','AbortError')),{once:true});
-        },
-      }),{headers:{'content-type':'video/mp4'}}));
-      return Promise.resolve(new Response('recovered-data',{headers:{'content-type':'video/mp4'}}));
-    });
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      resolveVideo
+        .mockResolvedValueOnce({url:'https://cdn.test/signed/stalled.mp4',name:'Movie.mp4',size:4096})
+        .mockResolvedValueOnce({url:'https://cdn.test/signed/recovered.mp4',name:'Movie.mp4',size:4096});
+      let attempts=0;
+      let firstBodyReadStarted:()=>void;
+      const bodyReadStarted=new Promise<void>((resolve)=>{firstBodyReadStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
+        attempts+=1;
+        if(attempts===1)return Promise.resolve(new Response(new ReadableStream({
+          start(controller) {
+            options.signal?.addEventListener('abort',()=>controller.error(new DOMException('aborted','AbortError')),{once:true});
+          },
+          pull() {
+            firstBodyReadStarted();
+            return new Promise<void>(()=>{});
+          },
+        }),{headers:{'content-type':'video/mp4'}}));
+        return Promise.resolve(new Response('recovered-data',{headers:{'content-type':'video/mp4'}}));
+      });
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await bodyReadStarted;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('recovered-data');
-    expect(resolveVideo).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('recovered-data');
+      expect(resolveVideo).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not refresh after the viewer cancels before the first media byte',async()=>{
     process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
     const client=new AbortController();
+    let fetchStarted:()=>void;
+    const started=new Promise<void>((resolve)=>{fetchStarted=resolve;});
     const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
+      fetchStarted();
       options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
     }));
     vi.stubGlobal('fetch',fetchMock);
     const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0',{signal:client.signal}),context);
-    await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(1));
+    await started;
     client.abort();
 
     const response=await pending;
@@ -450,34 +522,53 @@ describe('direct debrid streaming',()=>{
   });
 
   it('bounds a stalled provider DNS lookup and never fetches its late result',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    const resolveLookups:Array<(addresses:Array<{address:string;family:number}>)=>void>=[];
-    lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
-      resolveLookups.push(resolve);
-    }));
-    const fetchMock=vi.fn();
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      const resolveLookups:Array<(addresses:Array<{address:string;family:number}>)=>void>=[];
+      let firstLookupStarted:()=>void;
+      let secondLookupStarted:()=>void;
+      const firstStarted=new Promise<void>((resolve)=>{firstLookupStarted=resolve;});
+      const secondStarted=new Promise<void>((resolve)=>{secondLookupStarted=resolve;});
+      lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
+        resolveLookups.push(resolve);
+        if(resolveLookups.length===1)firstLookupStarted();
+        else secondLookupStarted();
+      }));
+      const fetchMock=vi.fn();
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await firstStarted;
+      await vi.advanceTimersByTimeAsync(250);
+      await secondStarted;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(resolveVideo).toHaveBeenCalledTimes(2);
-    expect(lookup).toHaveBeenCalledTimes(2);
-    expect(resolverCancel).toHaveBeenCalledTimes(2);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(resolveLookups).toHaveLength(2);
-    for(const resolve of resolveLookups)resolve([{address:'8.8.8.8',family:4}]);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(resolveVideo).toHaveBeenCalledTimes(2);
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(resolverCancel).toHaveBeenCalledTimes(2);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(resolveLookups).toHaveLength(2);
+      for(const resolve of resolveLookups)resolve([{address:'8.8.8.8',family:4}]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cancels a stalled provider DNS lookup without starting recovery traffic',async()=>{
     process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
     let resolveLookup:(addresses:Array<{address:string;family:number}>)=>void;
+    let lookupStarted:()=>void;
+    const started=new Promise<void>((resolve)=>{lookupStarted=resolve;});
     lookup.mockImplementation(()=>new Promise<Array<{address:string;family:number}>>((resolve)=>{
       resolveLookup=resolve;
+      lookupStarted();
     }));
     const client=new AbortController();
     const fetchMock=vi.fn();
@@ -486,7 +577,7 @@ describe('direct debrid streaming',()=>{
       new Request('https://kheyflix.test/api/debrid/stream/42/0',{signal:client.signal}),
       context,
     );
-    await vi.waitFor(()=>expect(lookup).toHaveBeenCalledTimes(1));
+    await started;
     client.abort();
 
     const response=await pending;
@@ -504,18 +595,34 @@ describe('direct debrid streaming',()=>{
   });
 
   it('returns a bounded safe timeout after one unsuccessful recovery attempt',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
-      options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
-    }));
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      let firstFetchStarted:()=>void;
+      let secondFetchStarted:()=>void;
+      const firstStarted=new Promise<void>((resolve)=>{firstFetchStarted=resolve;});
+      const secondStarted=new Promise<void>((resolve)=>{secondFetchStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
+        if(fetchMock.mock.calls.length===1)firstFetchStarted();
+        else secondFetchStarted();
+        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+      }));
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await firstStarted;
+      await vi.advanceTimersByTimeAsync(250);
+      await secondStarted;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(504);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
-    expect(resolveVideo).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_UPSTREAM_TIMEOUT'}});
+      expect(resolveVideo).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes an expired provider response once and then preserves the recovered media',async()=>{
@@ -537,20 +644,31 @@ describe('direct debrid streaming',()=>{
   });
 
   it('does not make a third upstream attempt when recovery returns a retryable provider status',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
-      if(fetchMock.mock.calls.length===1)return new Promise<Response>((_resolve,reject)=>{
-        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      let firstFetchStarted:()=>void;
+      const started=new Promise<void>((resolve)=>{firstFetchStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>{
+        if(fetchMock.mock.calls.length===1)return new Promise<Response>((_resolve,reject)=>{
+          firstFetchStarted();
+          options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+        });
+        return Promise.resolve(new Response('still unavailable',{status:503}));
       });
-      return Promise.resolve(new Response('still unavailable',{status:503}));
-    });
-    vi.stubGlobal('fetch',fetchMock);
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await started;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(503);
-    expect(resolveVideo).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(response.status).toBe(503);
+      expect(resolveVideo).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -586,20 +704,31 @@ describe('direct debrid streaming',()=>{
   });
 
   it('rejects an unsafe refreshed link before issuing a second provider request',async()=>{
-    process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
-    resolveVideo
-      .mockResolvedValueOnce({url:'https://cdn.test/signed/slow.mp4',name:'Movie.mp4',size:4096})
-      .mockResolvedValueOnce({url:'http://cdn.test/signed/unsafe.mp4',name:'Movie.mp4',size:4096});
-    const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
-      options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
-    }));
-    vi.stubGlobal('fetch',fetchMock);
+    vi.useFakeTimers();
+    try {
+      process.env.KHEYFLIX_STREAM_FIRST_BYTE_TIMEOUT_MS='250';
+      resolveVideo
+        .mockResolvedValueOnce({url:'https://cdn.test/signed/slow.mp4',name:'Movie.mp4',size:4096})
+        .mockResolvedValueOnce({url:'http://cdn.test/signed/unsafe.mp4',name:'Movie.mp4',size:4096});
+      let fetchStarted:()=>void;
+      const started=new Promise<void>((resolve)=>{fetchStarted=resolve;});
+      const fetchMock=vi.fn((_url:string,options:RequestInit)=>new Promise<Response>((_resolve,reject)=>{
+        fetchStarted();
+        options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+      }));
+      vi.stubGlobal('fetch',fetchMock);
 
-    const response=await GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      const pending=GET(new Request('https://kheyflix.test/api/debrid/stream/42/0'),context);
+      await started;
+      await vi.advanceTimersByTimeAsync(250);
+      const response=await pending;
 
-    expect(response.status).toBe(502);
-    expect(await response.json()).toMatchObject({error:{code:'STREAM_URL_UNSAFE'}});
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({error:{code:'STREAM_URL_UNSAFE'}});
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects an insecure provider redirect before following it',async()=>{
@@ -783,6 +912,8 @@ describe('direct debrid streaming',()=>{
     const client=new AbortController();
     const encoder=new TextEncoder();
     let canceled=false;
+    let cancellationObserved:()=>void;
+    const canceledAt=new Promise<void>((resolve)=>{cancellationObserved=resolve;});
     const source=new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode('first-chunk'));
@@ -792,6 +923,7 @@ describe('direct debrid streaming',()=>{
       },
       cancel() {
         canceled=true;
+        cancellationObserved();
       },
     });
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(source,{headers:{'content-type':'video/mp4'}})));
@@ -801,7 +933,8 @@ describe('direct debrid streaming',()=>{
     await reader?.read();
     client.abort();
 
-    await vi.waitFor(()=>expect(canceled).toBe(true));
+    await canceledAt;
+    expect(canceled).toBe(true);
     expect(resolveVideo).toHaveBeenCalledTimes(1);
   });
 
