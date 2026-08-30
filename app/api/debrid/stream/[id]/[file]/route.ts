@@ -3,7 +3,7 @@ import {
   contentTypeFor,
   resolveVideo,
 } from "../../../../../lib/alldebrid";
-import { lookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { requireProviderAccess } from "../../../../../lib/access";
@@ -158,7 +158,69 @@ const privateIp = (address: string) => {
 const normalizedHostname = (hostname: string) =>
   hostname.replace(/^\[|\]$/g, "").toLowerCase();
 
-const resolvePinnedHttpsTarget = async (value: string) => {
+const abortReason = (signal: AbortSignal) =>
+  signal.reason ?? new DOMException("The provider request was canceled.", "AbortError");
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (signal?.aborted) throw abortReason(signal);
+};
+
+const awaitAbortable = <T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+) => {
+  if (!signal) return operation;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => {
+      try {
+        onAbort?.();
+      } catch {
+        // Cancellation must not be delayed by a best-effort provider cleanup.
+      }
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    operation.then(
+      (value) => {
+        cleanup();
+        if (signal.aborted) reject(abortReason(signal));
+        else resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+};
+
+const resolveDnsAddresses = (hostname: string, signal?: AbortSignal) => {
+  throwIfAborted(signal);
+  const resolver = new Resolver();
+  const addressesFor = (addresses: string[], family: 4 | 6) => {
+    if (!addresses.length) throw new Error("Provider DNS returned no addresses.");
+    return addresses.map((address) => ({ address, family }));
+  };
+  // Either address family is sufficient because the caller validates and pins
+  // only the answer returned here. Waiting for a broken sibling family would
+  // turn an otherwise usable IPv4/IPv6 response into a startup timeout.
+  const operation = Promise.any([
+    resolver.resolve4(hostname).then((addresses) => addressesFor(addresses, 4)),
+    resolver.resolve6(hostname).then((addresses) => addressesFor(addresses, 6)),
+  ]).finally(() => resolver.cancel());
+  return awaitAbortable(operation, signal, () => resolver.cancel());
+};
+
+const resolvePinnedHttpsTarget = async (value: string, signal?: AbortSignal) => {
+  throwIfAborted(signal);
   let url: URL;
   try {
     url = new URL(value);
@@ -185,7 +247,8 @@ const resolvePinnedHttpsTarget = async (value: string) => {
       addresses: [{ address: hostname, family: isIP(hostname) as 4 | 6 }],
     };
   try {
-    const addresses = await lookup(hostname, { all: true, verbatim: true });
+    const addresses = await resolveDnsAddresses(hostname, signal);
+    throwIfAborted(signal);
     if (
       !addresses.length ||
       addresses.some(
@@ -201,13 +264,44 @@ const resolvePinnedHttpsTarget = async (value: string) => {
         family: family as 4 | 6,
       })),
     };
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 };
 
-const secureMediaUrl = async (value: string) =>
-  Boolean(await resolvePinnedHttpsTarget(value));
+const validateDirectMediaUrl = async (value: string, request: Request) => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortForClient = () => controller.abort(request.signal.reason);
+  if (request.signal.aborted) abortForClient();
+  else request.signal.addEventListener("abort", abortForClient, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, firstByteTimeoutMs());
+  try {
+    return Boolean(await resolvePinnedHttpsTarget(value, controller.signal));
+  } catch (error) {
+    if (request.signal.aborted)
+      throw new AllDebridError(
+        "The playback request was canceled.",
+        "STREAM_REQUEST_ABORTED",
+        499,
+      );
+    if (timedOut)
+      throw new AllDebridError(
+        "The media source is taking too long to respond.",
+        "STREAM_UPSTREAM_TIMEOUT",
+        504,
+        true,
+      );
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    request.signal.removeEventListener("abort", abortForClient);
+  }
+};
 
 const singleByteRange = (value: string | null) => {
   if (!value) return null;
@@ -380,13 +474,15 @@ const fetchProviderResponse = async (
     ...(range ? { Range: range } : {}),
   };
   for (let redirect = 0; redirect <= MAX_PROVIDER_REDIRECTS; redirect += 1) {
-    const target = await resolvePinnedHttpsTarget(url);
+    throwIfAborted(signal);
+    const target = await resolvePinnedHttpsTarget(url, signal);
     if (!target)
       throw new AllDebridError(
         "The media service returned an unsafe stream URL.",
         "STREAM_URL_UNSAFE",
         502,
       );
+    throwIfAborted(signal);
     const pinned = pinnedHttpsDispatcher(target);
     let response: Response;
     try {
@@ -667,7 +763,7 @@ async function handle(
     const ip = relay ? undefined : clientIp(request);
     let media = await resolveVideo(mediaId, fileIndex, ip);
     if (!relay) {
-      if (!(await secureMediaUrl(media.url)))
+      if (!(await validateDirectMediaUrl(media.url, request)))
         throw new AllDebridError(
           "The media service returned an unsafe stream URL.",
           "STREAM_URL_UNSAFE",
