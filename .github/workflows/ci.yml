@@ -33,10 +33,12 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
-      - name: Install Chromium for UI smoke tests
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium and WebKit for UI smoke tests
+        run: npx playwright install --with-deps chromium webkit
       - name: UI smoke tests
         run: npm run test:ui:smoke
+      - name: WebKit player keyboard smoke test
+        run: npm run test:ui:webkit
 
   production-playback:
     name: Verify Railway production
