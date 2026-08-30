@@ -8,6 +8,16 @@ const trackPlaybackPath =
   process.env.KHEYFLIX_PLAYBACK_TEST_PATH ||
   "/stream/660270988/3/shrek-2001-multilingual";
 
+test.afterEach(async ({ page }) => {
+  // Release the current session before the next production playback profile
+  // starts. Context teardown is best-effort, while this route transition
+  // exercises the same explicit player cleanup a viewer performs.
+  if (!page.isClosed())
+    await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(
+      () => undefined,
+    );
+});
+
 test("a real movie starts and keeps streaming", async ({ page }) => {
   test.setTimeout(90_000);
   let blockingPreflights = 0;
