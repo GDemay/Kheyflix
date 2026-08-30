@@ -1,6 +1,5 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Hls from "hls.js";
 import {
   ArrowLeft,
   Captions,
@@ -27,19 +26,32 @@ import {
 import {
   availableQualities,
   bestAutoQuality,
+  BOOTSTRAP_PROMOTION_DELAY_MS,
+  bootstrapStartOffset,
+  autoQualityUpgradeTarget,
+  canStartPlaybackSource,
   needsCompatiblePlayback,
   playbackSurfaceState,
   QualityMode,
   releaseTranscoderSession,
   RenditionQuality,
   requiresMutedAutoplay,
+  shouldSurfaceMediaInfoError,
+  supportsNativeAppleHls,
   usesBootstrapStream,
 } from "./lib/playback";
 import {
   COMPATIBLE_STARTUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
+  shouldArmStartupRecoveryTimer,
   startupRecovery,
 } from "./lib/playback-recovery";
+import {
+  nativeHlsRecoveryAction,
+  nativeHlsResumeAction,
+  nativeHlsSeekAction,
+  nativeVodChunkEndAction,
+} from "./lib/hls-recovery";
 import {
   defaultPlaybackPreferences,
   chooseAudioTrack,
@@ -69,6 +81,42 @@ type MediaInfo = {
     title: string;
     supported: boolean;
   }>;
+};
+
+type TranscoderSessionReplacement = {
+  audio: number | undefined;
+  bootstrap: boolean;
+  compatible: boolean;
+  copyCompatibleVideo: boolean;
+  rendition: RenditionQuality;
+  subtitle: number | undefined;
+  sync: number;
+};
+
+type TranscoderSessionConfiguration = TranscoderSessionReplacement & {
+  start: number;
+};
+
+type TranscoderSessionTransition = {
+  session?: string;
+  skipCurrentStop?: boolean;
+};
+
+type NativeVodPrewarm = {
+  session: string;
+  source: string;
+  start: number;
+};
+
+const RELEASED_TRANSCODER_SESSION_LIMIT = 256;
+
+const rememberReleasedTranscoderSession = (sessions: Set<string>, token: string) => {
+  sessions.add(token);
+  while (sessions.size > RELEASED_TRANSCODER_SESSION_LIMIT) {
+    const oldest = sessions.values().next().value;
+    if (!oldest) break;
+    sessions.delete(oldest);
+  }
 };
 
 class MediaInfoHttpError extends Error {
@@ -274,9 +322,40 @@ export default function StreamingPlayer({
     lastSaved = useRef(0),
     startupRetries = useRef(0),
     playbackRequestedAt = useRef(0),
+    startupDeadline = useRef(0),
+    startupTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
+    startupSettled = useRef(false),
     firstFrameRecorded = useRef(false),
-    autoUpgradeRequested = useRef(false),
+    bufferingStartedAt = useRef(0),
+    rebufferCount = useRef(0),
+    sourceAttempt = useRef(0),
+    hlsRecoveryAttempts = useRef(0),
+    nativeHlsRecoverySession = useRef<string>(),
+    nativeHlsSeekRotation = useRef(false),
+    nativeVodChunkTransition = useRef(false),
+    nativeVodExpectedHandoff = useRef(false),
+    nativeVodPrewarm = useRef<NativeVodPrewarm>(),
+    nativeVodPrewarmGeneration = useRef(0),
+    nativeVodPrewarmPending = useRef(false),
+    releasedTranscoderSessions = useRef(new Set<string>()),
+    bestEffortStoppedTranscoderSessions = useRef(new Set<string>()),
+    releasingTranscoderSessions = useRef(new Map<string, Promise<void>>()),
+    autoUpgradeRequested = useRef<RenditionQuality | null>(null),
+    // Metadata failures that are safe to surface are authoritative. A media
+    // element can report its own error in the same event turn while a
+    // bootstrap replacement is releasing; that recovery must never erase the
+    // actionable provider error or attach a new source behind its alert.
+    terminalPlaybackFailure = useRef(false),
+    terminalPlaybackFailureEpoch = useRef(0),
+    transcoderSessionReplacementPending = useRef(false),
+    queuedTranscoderSessionReplacement = useRef<
+      | { position: number; replacement: TranscoderSessionReplacement }
+      | undefined
+    >(undefined),
+    nextEpisodeNavigationPending = useRef(false),
+    navigationGeneration = useRef(0),
     userPaused = useRef(false),
+    attachedIosSource = useRef<string>(),
     mediaRequests = useRef(new PlaybackRequestGate());
   const queue = useMemo<PlaybackQueueItem[]>(() => {
       try {
@@ -299,16 +378,35 @@ export default function StreamingPlayer({
     next = nextInQueue(queue, identity),
     preferenceKey =
       currentQueue?.seriesId || currentQueue?.titleId || identity.titleId;
+  const [initialPlaybackPreferences] = useState(() => {
+      try {
+        return parsePlaybackPreferences(
+          localStorage.getItem(`${PREFERENCES_KEY}:${preferenceKey}`),
+        );
+      } catch {
+        return defaultPlaybackPreferences();
+      }
+    }),
+    initialQuality: RenditionQuality =
+      initialPlaybackPreferences.qualityMode === "auto"
+        ? "480"
+        : initialPlaybackPreferences.qualityMode,
+    initialBootstrap =
+      !route.compat && initialPlaybackPreferences.qualityMode === "auto";
   const [info, setInfo] = useState<MediaInfo>(),
+    [nativeHlsPlayback] = useState(() => {
+      if (typeof navigator === "undefined") return false;
+      const video = document.createElement("video");
+      return supportsNativeAppleHls(
+        navigator.vendor,
+        video.canPlayType("application/vnd.apple.mpegurl") ||
+          video.canPlayType("application/x-mpegURL"),
+      );
+    }),
     [iosPlayback] = useState(() =>
       typeof navigator !== "undefined" &&
-      requiresMutedAutoplay(navigator.userAgent) &&
-      /Apple/i.test(navigator.vendor) &&
-      Boolean(
-        document
-          .createElement("video")
-          .canPlayType("application/vnd.apple.mpegurl"),
-      ),
+      nativeHlsPlayback &&
+      requiresMutedAutoplay(navigator.userAgent),
     ),
     [finePointer] = useState(() =>
       typeof window !== "undefined" &&
@@ -317,9 +415,11 @@ export default function StreamingPlayer({
     [mediaReady, setMediaReady] = useState(false),
     [compatible, setCompatible] = useState(Boolean(route.compat)),
     [copyCompatibleVideo, setCopyCompatibleVideo] = useState(false),
-    [qualityMode, setQualityMode] = useState<QualityMode>("auto"),
-    [rendition, setRendition] = useState<RenditionQuality>("480"),
-    [offset, setOffset] = useState(() => {
+    [qualityMode, setQualityMode] = useState<QualityMode>(
+      initialPlaybackPreferences.qualityMode,
+    ),
+    [rendition, setRendition] = useState<RenditionQuality>(initialQuality),
+    [initialOffset] = useState(() => {
       try {
         return resumePosition(
           findWatchProgress(
@@ -332,19 +432,36 @@ export default function StreamingPlayer({
       }
     }),
     [session, setSession] = useState(newSessionToken),
-    [bootstrap, setBootstrap] = useState(true),
+    // Discovery already knows that `compat=1` needs a browser-safe rendition.
+    // Start that fixed profile directly instead of using a 30-second bootstrap
+    // followed by a visibly disruptive source replacement.
+    [bootstrap, setBootstrap] = useState(initialBootstrap),
+    [sessionConfiguration, setSessionConfiguration] =
+      useState<TranscoderSessionConfiguration>(() => ({
+        audio: undefined,
+        bootstrap: initialBootstrap,
+        compatible: Boolean(route.compat),
+        copyCompatibleVideo: false,
+        rendition: initialQuality,
+        start: initialOffset,
+        subtitle: undefined,
+        sync: initialPlaybackPreferences.audioSync,
+      })),
     [firstFrameMs, setFirstFrameMs] = useState<number>(),
     [audio, setAudio] = useState<number>(),
     [subtitle, setSubtitle] = useState<number>(),
     [subtitleSize, setSubtitleSize] = useState<"small" | "medium" | "large">("medium"),
-    [preferences, setPreferences] = useState(defaultPlaybackPreferences),
+    [preferences, setPreferences] = useState(initialPlaybackPreferences),
     [menu, setMenu] = useState<
       "audio" | "subtitles" | "settings" | null
     >(null),
     [playing, setPlaying] = useState(false),
     [pausedByUser, setPausedByUser] = useState(false),
     [startedPlayback, setStartedPlayback] = useState(false),
+    [iosSourceActivated, setIosSourceActivated] = useState(false),
     [localTime, setLocalTime] = useState(0),
+    [nativeVodChunkDuration, setNativeVodChunkDuration] = useState(0),
+    [nativeVodMetadataSource, setNativeVodMetadataSource] = useState<string>(),
     [scrub, setScrub] = useState<number>(),
     [nativeDuration, setNativeDuration] = useState(0),
     [volume, setVolume] = useState(() =>
@@ -357,30 +474,86 @@ export default function StreamingPlayer({
     [error, setError] = useState(false),
     [errorMessage, setErrorMessage] = useState(""),
     [mediaInfoAttempt, setMediaInfoAttempt] = useState(0),
-    [controls, setControls] = useState(true);
-  const transcoded = compatible || rendition !== "original",
-    effectiveBootstrap = usesBootstrapStream(iosPlayback, bootstrap),
-    activeQuality = !transcoded ? "original" : effectiveBootstrap ? "bootstrap" : rendition,
-    playbackOffset = effectiveBootstrap ? Math.floor(offset / 30) * 30 : offset,
-    activeSession = effectiveBootstrap
-      ? `bootstrap-${id}-${file}-${playbackOffset}`
-      : session,
+    [controls, setControls] = useState(true),
+    [transcoderSessionTransition, setTranscoderSessionTransition] = useState(false);
+  const transcoded =
+      sessionConfiguration.compatible ||
+      sessionConfiguration.rendition !== "original",
+    effectiveBootstrap = usesBootstrapStream(
+      nativeHlsPlayback,
+      sessionConfiguration.bootstrap,
+    ),
+    activeQuality = !transcoded
+      ? "original"
+      : effectiveBootstrap
+        ? "bootstrap"
+        : sessionConfiguration.rendition,
+    playbackOffset = effectiveBootstrap
+      ? bootstrapStartOffset(sessionConfiguration.start)
+      : sessionConfiguration.start,
+    activeSession = session,
     sourceHeight = info?.video[0]?.height || 0,
     duration = info?.duration || nativeDuration,
     absoluteTime = transcoded ? playbackOffset + localTime : localTime,
-    displayTime = scrub ?? absoluteTime;
-  const source = (transcoded && effectiveBootstrap) || mediaReady
-    ? iosPlayback && transcoded
-      ? `/api/debrid/hls/${id}/${file}/${activeSession}/master.m3u8?start=${playbackOffset}&quality=${activeQuality}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}`
+    displayTime = scrub ?? absoluteTime,
+    sustainedCompatibility =
+      sessionConfiguration.compatible && !effectiveBootstrap,
+    fixedProfilePlayback =
+      transcoded &&
+      !effectiveBootstrap &&
+      sessionConfiguration.rendition !== "original",
+    activeSubtitle =
+      nativeHlsPlayback && transcoded && !startedPlayback
+        ? undefined
+        : subtitle;
+  const playbackMode = useRef({ effectiveBootstrap, nativeHlsPlayback });
+  useEffect(() => {
+    playbackMode.current = { effectiveBootstrap, nativeHlsPlayback };
+  }, [effectiveBootstrap, nativeHlsPlayback]);
+  const nativeHlsSource = useCallback(
+    (token: string, start: number, prewarm = false) =>
+      `/api/debrid/hls/${id}/${file}/${token}/master.m3u8?start=${start}&quality=${activeQuality}&mode=${prewarm ? "native-vod-warm" : "native-vod"}${sessionConfiguration.audio !== undefined ? `&audio=${sessionConfiguration.audio}` : ""}&sync=${sessionConfiguration.sync}`,
+    [activeQuality, file, id, sessionConfiguration.audio, sessionConfiguration.sync],
+  );
+  const recordNativeVodMetadata = useCallback(
+    (currentSource: string | undefined, element: HTMLVideoElement) => {
+      if (!nativeHlsPlayback || !transcoded || !currentSource) return;
+      const chunkDuration = element.duration;
+      if (!Number.isFinite(chunkDuration) || chunkDuration <= 0) return;
+      // Consecutive prepared chunks both have a 30-second duration. Keep the
+      // source identity in React state as well as the duration so an equal
+      // duration still re-arms the next prewarm after a WebKit source swap.
+      setNativeVodMetadataSource(currentSource);
+      setNativeVodChunkDuration(chunkDuration);
+    },
+    [nativeHlsPlayback, transcoded],
+  );
+  const resolvedSource = !transcoderSessionTransition && canStartPlaybackSource({
+    effectiveBootstrap,
+    fixedProfilePlayback,
+    nativeHlsPlayback,
+    mediaReady,
+    transcoded,
+  })
+    ? nativeHlsPlayback && transcoded
+      ? nativeHlsSource(activeSession, playbackOffset)
       : transcoded
-      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${offset}&quality=${activeQuality}${!effectiveBootstrap && audio !== undefined ? `&audio=${audio}` : ""}${compatible && subtitle !== undefined ? `&subtitle=${subtitle}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && rendition === "original" ? "&video=copy" : ""}`
+      ? `/api/debrid/transcode/${id}/${file}?session=${activeSession}&start=${sessionConfiguration.start}&quality=${activeQuality}${!effectiveBootstrap && sessionConfiguration.audio !== undefined ? `&audio=${sessionConfiguration.audio}` : ""}&sync=${sessionConfiguration.sync}${sessionConfiguration.copyCompatibleVideo && sessionConfiguration.rendition === "original" ? "&video=copy" : ""}`
       : `/api/debrid/stream/${id}/${file}`
     : undefined;
+  // iPhone Safari may fetch and parse a playlist before the viewer has
+  // interacted, then never advance to a segment. Attach its native HLS source
+  // in the first explicit tap so playlist, decoder, and audio-policy state are
+  // established in one trusted gesture. Later session rotations keep that
+  // activation and remain hands-free.
+  const source =
+    iosPlayback && !iosSourceActivated ? undefined : resolvedSource;
   const surfaces = playbackSurfaceState({
     controls,
     error,
     finePointer,
     iosPlayback,
+    iosSourceActivated,
     loading,
     pausedByUser,
     playing,
@@ -391,9 +564,22 @@ export default function StreamingPlayer({
     : route.title || currentQueue?.label || "Kheyflix video";
   const stop = useCallback(
     (token = session) => {
+      if (
+        releasedTranscoderSessions.current.has(token) ||
+        bestEffortStoppedTranscoderSessions.current.has(token) ||
+        releasingTranscoderSessions.current.has(token)
+      )
+        return;
+      // A beacon has no response to await. Keep it distinct from an awaited
+      // release so a later source replacement can still make an explicit,
+      // capacity-safe stop request if this best-effort send was lost.
+      rememberReleasedTranscoderSession(
+        bestEffortStoppedTranscoderSessions.current,
+        token,
+      );
       const url = `/api/debrid/transcode/${id}/${file}?session=${token}`;
-      if (navigator.sendBeacon) navigator.sendBeacon(url);
-      else void fetch(url, { method: "POST", keepalive: true });
+      if (navigator.sendBeacon?.(url)) return;
+      void fetch(url, { method: "POST", keepalive: true });
     },
     [file, id, session],
   );
@@ -428,6 +614,46 @@ export default function StreamingPlayer({
   );
   const persistRef = useRef(persist),
     stopRef = useRef(stop);
+  const reportPlayback = useCallback(
+    (
+      event:
+        | "first_frame"
+        | "native_vod_handoff"
+        | "rebuffer"
+        | "startup_timeout"
+        | "startup_retry"
+        | "failure",
+      elapsedMs: number,
+    ) => {
+      const payload = JSON.stringify({
+        event,
+        elapsedMs: Math.max(0, Math.round(elapsedMs)),
+        rebufferCount: rebufferCount.current,
+        attempt: Math.max(1, sourceAttempt.current),
+        phase: effectiveBootstrap ? "bootstrap" : "standard",
+        quality: activeQuality,
+      });
+      try {
+        if (
+          navigator.sendBeacon &&
+          navigator.sendBeacon(
+            "/api/playback/telemetry",
+            new Blob([payload], { type: "application/json" }),
+          )
+        )
+          return;
+        void fetch("/api/playback/telemetry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true,
+        }).catch(() => undefined);
+      } catch {
+        // Diagnostics never interrupt playback.
+      }
+    },
+    [activeQuality, effectiveBootstrap],
+  );
   const showControls = useCallback(() => {
     setControls(true);
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -442,34 +668,251 @@ export default function StreamingPlayer({
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
   }, [controls, pausedByUser, playing]);
+  const stopSessionBeforeReplacement = useCallback(
+    async (token: string) => {
+      if (releasedTranscoderSessions.current.has(token)) return;
+      const existingRelease = releasingTranscoderSessions.current.get(token);
+      if (existingRelease) {
+        await existingRelease;
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 3_000);
+      const release = Promise.resolve()
+        .then(() =>
+          releaseTranscoderSession(
+            fetch,
+            String(id),
+            file,
+            token,
+            controller.signal,
+          ),
+        )
+        .then(() => {
+          rememberReleasedTranscoderSession(releasedTranscoderSessions.current, token);
+        })
+        .catch(() => {
+          // The replacement still has bounded server-side admission. A
+          // best-effort stop must not strand the viewer on a paused frame.
+        })
+        .finally(() => {
+          window.clearTimeout(timeout);
+          releasingTranscoderSessions.current.delete(token);
+        });
+      releasingTranscoderSessions.current.set(token, release);
+      await release;
+    },
+    [file, id],
+  );
+  const replaceTranscoderSession = useCallback(
+    async (
+      position: number,
+      replacement: TranscoderSessionReplacement,
+      transition: TranscoderSessionTransition = {},
+    ): Promise<TranscoderSessionReplacement | false> => {
+      if (terminalPlaybackFailure.current) return false;
+      if (transcoderSessionReplacementPending.current) {
+        // Preserve the latest deliberate player adjustment while the prior
+        // job is releasing. This keeps capacity bounded without discarding a
+        // quick audio or quality correction.
+        queuedTranscoderSessionReplacement.current = { position, replacement };
+        return false;
+      }
+      transcoderSessionReplacementPending.current = true;
+      const failureEpoch = terminalPlaybackFailureEpoch.current;
+      const prepared = nativeVodPrewarm.current;
+      // A manual seek, pause/resume, quality change, or failed recovery makes
+      // any prepared successor stale. Release it before allocating another
+      // bounded playback session. The one exception is the exact successor
+      // selected at a finite VOD boundary below.
+      if (prepared && prepared.session !== transition.session) {
+        nativeVodPrewarm.current = undefined;
+        nativeVodPrewarmGeneration.current += 1;
+        void stopSessionBeforeReplacement(prepared.session);
+      }
+      let selected = { position, replacement };
+      let target = Math.max(0, Math.min(duration || position, position));
+      persistRef.current(target);
+      // With a maximum of two transcoder jobs, every in-player replacement
+      // must make its new source wait for the old one to be released. The
+      // source gate also prevents Safari from retaining a stale rolling HLS
+      // playlist while the handoff is in progress.
+      setTranscoderSessionTransition(true);
+      setLoading(true);
+      setError(false);
+      setErrorMessage("");
+      try {
+        if (transcoded && !transition.skipCurrentStop)
+          await stopSessionBeforeReplacement(activeSession);
+        // A provider metadata error may have arrived while the prior source
+        // was being released. Do not let that older recovery publish a fresh
+        // session after the viewer has been shown a terminal, retryable error.
+        if (
+          terminalPlaybackFailure.current ||
+          failureEpoch !== terminalPlaybackFailureEpoch.current
+        )
+          return false;
+        selected = queuedTranscoderSessionReplacement.current || selected;
+        queuedTranscoderSessionReplacement.current = undefined;
+        target = Math.max(
+          0,
+          Math.min(duration || selected.position, selected.position),
+        );
+        persistRef.current(target);
+        const next = selected.replacement;
+        setLocalTime(0);
+        setAudio(next.audio);
+        setCompatible(next.compatible);
+        setCopyCompatibleVideo(next.copyCompatibleVideo);
+        setBootstrap(next.bootstrap);
+        setRendition(next.rendition);
+        setSubtitle(next.subtitle);
+        setSessionConfiguration({ ...next, start: target });
+        setSession(transition.session || newSessionToken());
+        if (transcoded && transition.skipCurrentStop)
+          void stopSessionBeforeReplacement(activeSession);
+        autoUpgradeRequested.current = null;
+        return next;
+      } finally {
+        const queued = queuedTranscoderSessionReplacement.current;
+        queuedTranscoderSessionReplacement.current = undefined;
+        transcoderSessionReplacementPending.current = false;
+        // A Retry can be pressed while a failed replacement is still
+        // releasing. Start its latest requested source only after the stale
+        // replacement has been invalidated, without briefly reopening the
+        // old source gate.
+        if (queued && !terminalPlaybackFailure.current)
+          void replaceTranscoderSession(queued.position, queued.replacement);
+        else setTranscoderSessionTransition(false);
+      }
+    },
+    [activeSession, duration, stopSessionBeforeReplacement, transcoded],
+  );
+  const replaceNativeHlsSession = useCallback(
+    (position: number, transition?: TranscoderSessionTransition) =>
+      replaceTranscoderSession(position, {
+        audio,
+        bootstrap,
+        compatible,
+        copyCompatibleVideo,
+        rendition,
+        subtitle,
+        sync: preferences.audioSync,
+      }, transition),
+    [
+      audio,
+      bootstrap,
+      compatible,
+      copyCompatibleVideo,
+      preferences.audioSync,
+      rendition,
+      replaceTranscoderSession,
+      subtitle,
+    ],
+  );
+  const prewarmNativeVodChunk = useCallback(
+    (start: number) => {
+      if (
+        !nativeHlsPlayback ||
+        !transcoded ||
+        !Number.isFinite(duration) ||
+        duration <= 0 ||
+        start >= duration - 0.5 ||
+        nativeVodPrewarmPending.current
+      )
+        return;
+      const existing = nativeVodPrewarm.current;
+      if (existing && Math.abs(existing.start - start) < 0.5) return;
+      if (existing) {
+        nativeVodPrewarm.current = undefined;
+        nativeVodPrewarmGeneration.current += 1;
+        void stopSessionBeforeReplacement(existing.session);
+      }
+      const session = newSessionToken();
+      const prepared: NativeVodPrewarm = {
+        session,
+        start,
+        source: nativeHlsSource(session, start, true),
+      };
+      const generation = ++nativeVodPrewarmGeneration.current;
+      nativeVodPrewarmPending.current = true;
+      void fetch(prepared.source, { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Native VOD prewarm was rejected.");
+          await response.text();
+          if (generation !== nativeVodPrewarmGeneration.current) {
+            void stopSessionBeforeReplacement(prepared.session);
+            return;
+          }
+          nativeVodPrewarm.current = prepared;
+        })
+        .catch(() => {
+          // EOF still has the ordinary bounded native-session replacement as
+          // a fallback. A speculative prewarm must never surface an error.
+        })
+        .finally(() => {
+          if (generation === nativeVodPrewarmGeneration.current)
+            nativeVodPrewarmPending.current = false;
+        });
+    },
+    [duration, nativeHlsPlayback, nativeHlsSource, stopSessionBeforeReplacement, transcoded],
+  );
   const toggle = useCallback(() => {
     const element = video.current;
     if (!element) return;
     if (element.paused) {
       userPaused.current = false;
       setPausedByUser(false);
+      if (
+        nativeHlsResumeAction({
+          nativeHlsPlayback,
+          startedPlayback,
+          transcoded,
+        }) === "rotate-session"
+      ) {
+        const currentTime = Number.isFinite(element.currentTime)
+          ? element.currentTime
+          : 0;
+        void replaceNativeHlsSession(playbackOffset + currentTime);
+        return;
+      }
       void element.play().catch(() => undefined);
     } else {
       userPaused.current = true;
       setPausedByUser(true);
       element.pause();
     }
-  }, []);
+  }, [nativeHlsPlayback, playbackOffset, replaceNativeHlsSession, startedPlayback, transcoded]);
   const restart = useCallback(
-    (at: number, nextAudio = audio, nextQuality = rendition) => {
-      const target = Math.max(0, Math.min(duration || at, at));
-      persist(target);
-      stop();
-      setLoading(true);
-      setError(false);
-      setErrorMessage("");
-      setLocalTime(0);
-      setOffset(target);
-      setAudio(nextAudio);
-      setRendition(nextQuality);
-      setSession(newSessionToken());
+    (
+      at: number,
+      nextAudio = audio,
+      nextQuality = rendition,
+      options: Partial<
+        Omit<TranscoderSessionReplacement, "audio" | "rendition">
+      > = {},
+    ) => {
+      void replaceTranscoderSession(at, {
+        audio: nextAudio,
+        bootstrap: options.bootstrap ?? bootstrap,
+        compatible: options.compatible ?? compatible,
+        copyCompatibleVideo:
+          options.copyCompatibleVideo ?? copyCompatibleVideo,
+        rendition: nextQuality,
+        subtitle: options.subtitle ?? subtitle,
+        sync: options.sync ?? preferences.audioSync,
+      });
     },
-    [audio, duration, persist, rendition, stop],
+    [
+      audio,
+      bootstrap,
+      compatible,
+      copyCompatibleVideo,
+      preferences.audioSync,
+      rendition,
+      replaceTranscoderSession,
+      subtitle,
+    ],
   );
   const seek = useCallback(
     (at: number) => {
@@ -485,39 +928,107 @@ export default function StreamingPlayer({
     [duration, persist, restart, transcoded],
   );
   const safeBack = useCallback(() => {
+    navigationGeneration.current += 1;
     persist();
     if (transcoded) stop();
     onBack();
   }, [onBack, persist, stop, transcoded]);
   const playNext = useCallback(() => {
-    if (!next) return;
+    if (!next || nextEpisodeNavigationPending.current) return;
+    nextEpisodeNavigationPending.current = true;
+    const generation = ++navigationGeneration.current;
     persist();
-    if (transcoded) stop();
-    navigate({
-      section: "stream",
-      id: String(next.magnetId),
-      file: next.file,
-      title: next.seriesId
-        ? `${next.seriesTitle || "Series"} · S${String(next.season).padStart(2, "0")} E${String(next.episode).padStart(2, "0")} · ${next.label}`
-        : next.label,
-      compat: transcoded,
-    });
-  }, [navigate, next, persist, stop, transcoded]);
+    const navigateToNext = () => {
+      if (generation !== navigationGeneration.current) return;
+      navigate({
+        section: "stream",
+        id: String(next.magnetId),
+        file: next.file,
+        title: next.seriesId
+          ? `${next.seriesTitle || "Series"} · S${String(next.season).padStart(2, "0")} E${String(next.episode).padStart(2, "0")} · ${next.label}`
+          : next.label,
+        compat: transcoded,
+      });
+    };
+    if (!transcoded) {
+      navigateToNext();
+      return;
+    }
+    // Do not send the next episode into a saturated two-slot service while
+    // this episode is still being stopped. The source gate keeps the current
+    // player quiet during the bounded release request.
+    setTranscoderSessionTransition(true);
+    void stopSessionBeforeReplacement(activeSession).finally(navigateToNext);
+  }, [activeSession, navigate, next, persist, stopSessionBeforeReplacement, transcoded]);
 
-  const restartRef = useRef(restart),
-    absoluteTimeRef = useRef(absoluteTime);
+  const absoluteTimeRef = useRef(absoluteTime),
+    sessionConfigurationRef = useRef(sessionConfiguration),
+    replaceTranscoderSessionRef = useRef(replaceTranscoderSession);
   useEffect(() => {
+    if (startupTimer.current !== undefined) {
+      clearTimeout(startupTimer.current);
+      startupTimer.current = undefined;
+    }
+    if (!source) return;
+    sourceAttempt.current += 1;
     playbackRequestedAt.current = performance.now();
-  }, []);
+    startupDeadline.current =
+      playbackRequestedAt.current +
+      (nativeHlsPlayback
+        ? NATIVE_STARTUP_TIMEOUT_MS
+        : transcoded
+          ? COMPATIBLE_STARTUP_TIMEOUT_MS
+          : NATIVE_STARTUP_TIMEOUT_MS);
+    firstFrameRecorded.current = false;
+    startupSettled.current = false;
+    bufferingStartedAt.current = 0;
+  }, [nativeHlsPlayback, source, transcoded]);
   useEffect(() => {
-    restartRef.current = restart;
     absoluteTimeRef.current = absoluteTime;
-  }, [absoluteTime, restart]);
+    sessionConfigurationRef.current = sessionConfiguration;
+    replaceTranscoderSessionRef.current = replaceTranscoderSession;
+  }, [absoluteTime, replaceTranscoderSession, sessionConfiguration]);
   useEffect(() => {
-    if ((!mediaReady && !effectiveBootstrap) || !loading || error) return;
+    const clearActiveStartupTimer = () => {
+      if (startupTimer.current === undefined) return;
+      clearTimeout(startupTimer.current);
+      startupTimer.current = undefined;
+    };
+    if (
+      !source ||
+      !shouldArmStartupRecoveryTimer({
+        effectiveBootstrap,
+        error,
+        loading,
+        mediaReady,
+        nativeHlsPlayback,
+        startupSettled: startupSettled.current,
+      })
+    ) {
+      clearActiveStartupTimer();
+      return;
+    }
+    // Metadata and preference updates may re-render a native HLS player while
+    // its playlist is still stalled. Always count from the source's original
+    // request, rather than silently granting each render a fresh timeout.
+    const deadline =
+      startupDeadline.current ||
+      performance.now() +
+        (nativeHlsPlayback
+          ? NATIVE_STARTUP_TIMEOUT_MS
+          : transcoded
+            ? COMPATIBLE_STARTUP_TIMEOUT_MS
+            : NATIVE_STARTUP_TIMEOUT_MS);
     const timer = setTimeout(
       () => {
+        if (startupTimer.current === timer)
+          startupTimer.current = undefined;
+        if (terminalPlaybackFailure.current) return;
         const recovery = startupRecovery(transcoded, startupRetries.current);
+        reportPlayback(
+          recovery === "retry" ? "startup_retry" : "startup_timeout",
+          performance.now() - playbackRequestedAt.current,
+        );
         console.warn("[playback] startup timeout", {
           id,
           file,
@@ -528,24 +1039,37 @@ export default function StreamingPlayer({
           networkState: video.current?.networkState,
         });
         if (recovery === "fallback") {
-          setCompatible(true);
-          setSession(newSessionToken());
+          const configuration = sessionConfigurationRef.current;
+          void replaceTranscoderSessionRef.current(
+            absoluteTimeRef.current,
+            {
+              ...configuration,
+              bootstrap: false,
+              compatible: true,
+              rendition: "480",
+            },
+          );
         } else if (recovery === "retry") {
           startupRetries.current += 1;
-          restartRef.current(absoluteTimeRef.current);
+          const configuration = sessionConfigurationRef.current;
+          void replaceTranscoderSessionRef.current(
+            absoluteTimeRef.current,
+            configuration,
+          );
         } else {
           setLoading(false);
           setError(true);
+          stopRef.current();
         }
       },
-      iosPlayback
-        ? 90_000
-        : transcoded
-        ? COMPATIBLE_STARTUP_TIMEOUT_MS
-        : NATIVE_STARTUP_TIMEOUT_MS,
+      Math.max(0, deadline - performance.now()),
     );
-    return () => clearTimeout(timer);
-  }, [effectiveBootstrap, error, file, id, iosPlayback, loading, mediaReady, rendition, session, transcoded]);
+    startupTimer.current = timer;
+    return () => {
+      clearTimeout(timer);
+      if (startupTimer.current === timer) startupTimer.current = undefined;
+    };
+  }, [effectiveBootstrap, error, file, id, loading, mediaReady, nativeHlsPlayback, rendition, reportPlayback, session, source, transcoded]);
   useEffect(() => {
     persistRef.current = persist;
     stopRef.current = stop;
@@ -595,10 +1119,10 @@ export default function StreamingPlayer({
         setPreferences(savedPreferences);
         setSubtitleSize(savedPreferences.subtitleSize);
         const savedQuality = savedPreferences.qualityMode;
-        if (
+        const hasSavedQuality =
           savedQuality !== "auto" &&
-          availableQualities(value.video[0]?.height || 0).includes(savedQuality)
-        ) {
+          availableQualities(value.video[0]?.height || 0).includes(savedQuality);
+        if (hasSavedQuality) {
           setQualityMode(savedQuality);
           setRendition(savedQuality);
           setBootstrap(false);
@@ -622,6 +1146,9 @@ export default function StreamingPlayer({
                       track.language.toLowerCase() === "en")),
               )
             : undefined;
+        // Sidecar WebVTT keeps subtitle preference changes independent from
+        // the active audio/video session. Embedding the track in a running
+        // progressive transcode required a visibly disruptive source restart.
         setSubtitle(preferredSubtitle?.index);
         if (
           value.video[0]?.codec.toLowerCase() === "hevc" &&
@@ -630,23 +1157,36 @@ export default function StreamingPlayer({
             .canPlayType('video/mp4; codecs="hvc1"')
         )
           setCopyCompatibleVideo(true);
-        if (needsCompatiblePlayback(value.format, selected?.codec))
-          setCompatible(true);
-        const saved = resumePosition(
-          findWatchProgress(
-            parseWatchProgress(localStorage.getItem(PROGRESS_KEY)),
-            identity,
-          ),
+        const requiresCompatibility = needsCompatiblePlayback(
+          value.format,
+          selected?.codec,
         );
-        if (saved > 0) setOffset(saved);
+        if (requiresCompatibility)
+          setCompatible(true);
+        // This metadata request runs concurrently with a bootstrap or known
+        // compatible source. It may update the controls' desired settings,
+        // but it must never alter the URL/configuration for the token that is
+        // currently decoding. Explicit user choices and planned quality
+        // changes create a fresh session only after its predecessor stops.
         setMediaReady(true);
       })
       .catch((reason) => {
         if (controller.signal.aborted) return;
-        if (reason instanceof MediaInfoHttpError) {
+        const currentPlaybackMode = playbackMode.current;
+        if (
+          reason instanceof MediaInfoHttpError &&
+          shouldSurfaceMediaInfoError(
+            currentPlaybackMode.effectiveBootstrap,
+            currentPlaybackMode.nativeHlsPlayback,
+            reason.status,
+          )
+        ) {
+          terminalPlaybackFailure.current = true;
+          terminalPlaybackFailureEpoch.current += 1;
           setLoading(false);
           setErrorMessage(reason.message);
           setError(true);
+          stopRef.current();
           return;
         }
         setMediaReady(true);
@@ -655,37 +1195,94 @@ export default function StreamingPlayer({
       request.cancel();
       controller.abort();
     };
-  }, [file, id, identity, mediaInfoAttempt, preferenceKey, route.compat]);
+  }, [file, id, identity, mediaInfoAttempt, nativeHlsPlayback, preferenceKey, route.compat]);
   useEffect(() => {
     if (video.current)
       video.current.playbackRate = preferences.playbackRate;
   }, [preferences.playbackRate, source]);
   useEffect(() => {
+    if (!iosPlayback || !iosSourceActivated || !video.current) return;
     const element = video.current;
-    if (!iosPlayback || !source || !element || !Hls.isSupported()) return;
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      backBufferLength: 30,
-    });
-    hls.loadSource(source);
-    hls.attachMedia(element);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      if (effectiveBootstrap && offset > playbackOffset)
-        element.currentTime = offset - playbackOffset;
-      element.muted = true;
-      element.volume = 0;
-      void element.play().catch(() => setControls(true));
-    });
-    hls.on(Hls.Events.ERROR, (_event, data) => {
-      console.error("[playback] iOS HLS error", {
-        type: data.type,
-        details: data.details,
-        fatal: data.fatal,
+    if (!source) {
+      if (!attachedIosSource.current) return;
+      element.removeAttribute("src");
+      element.load();
+      attachedIosSource.current = undefined;
+      return;
+    }
+    if (attachedIosSource.current === source) return;
+    // Initial activation assigns the source synchronously in the tap handler.
+    // This effect is only for later session rotations, where React must not
+    // overwrite the native element in the same trusted interaction.
+    element.src = source;
+    element.load();
+    attachedIosSource.current = source;
+    element.muted = true;
+    element.volume = 0;
+    void element.play().catch(() => setControls(true));
+  }, [iosPlayback, iosSourceActivated, source]);
+  useEffect(() => {
+    // The master request is deliberately withheld until the finite VOD chunk
+    // is complete. Starting its successor at loadedmetadata (rather than
+    // waiting for the first decoded frame) gives the encoder the entire
+    // playable chunk as headroom without competing with the initial encoder.
+    if (
+      !source ||
+      nativeVodMetadataSource !== source ||
+      !nativeHlsPlayback ||
+      !transcoded ||
+      !duration ||
+      !Number.isFinite(nativeVodChunkDuration) ||
+      nativeVodChunkDuration <= 0
+    )
+      return;
+    prewarmNativeVodChunk(playbackOffset + nativeVodChunkDuration);
+  }, [
+    duration,
+    nativeHlsPlayback,
+    nativeVodChunkDuration,
+    nativeVodMetadataSource,
+    playbackOffset,
+    prewarmNativeVodChunk,
+    source,
+    transcoded,
+  ]);
+  useEffect(
+    () => () => {
+      nativeVodPrewarmGeneration.current += 1;
+      nativeVodPrewarmPending.current = false;
+      const prepared = nativeVodPrewarm.current;
+      nativeVodPrewarm.current = undefined;
+      if (prepared) void stopSessionBeforeReplacement(prepared.session);
+    },
+    [stopSessionBeforeReplacement],
+  );
+  const promoteAutoQuality = useCallback(
+    (target: RenditionQuality, position = absoluteTimeRef.current) => {
+      if (autoUpgradeRequested.current === target) return;
+      const targetAt = Math.max(0, position);
+      void replaceTranscoderSession(targetAt, {
+        audio,
+        bootstrap: false,
+        compatible,
+        copyCompatibleVideo,
+        rendition: target,
+        subtitle,
+        sync: preferences.audioSync,
+      }).then((applied) => {
+        if (applied && applied.rendition === target && !applied.bootstrap)
+          autoUpgradeRequested.current = target;
       });
-    });
-    return () => hls.destroy();
-  }, [effectiveBootstrap, iosPlayback, offset, playbackOffset, source]);
+    },
+    [
+      audio,
+      compatible,
+      copyCompatibleVideo,
+      preferences.audioSync,
+      replaceTranscoderSession,
+      subtitle,
+    ],
+  );
   useEffect(() => {
     if (!requiresMutedAutoplay(navigator.userAgent)) return;
     if (video.current) {
@@ -696,53 +1293,23 @@ export default function StreamingPlayer({
     return () => cancelAnimationFrame(frame);
   }, []);
   useEffect(() => {
-    if (iosPlayback || !transcoded || qualityMode !== "auto" || !playing || loading) return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      const target = bestAutoQuality(sourceHeight);
-      if (target === rendition || autoUpgradeRequested.current) return;
-      autoUpgradeRequested.current = true;
-      const targetAt = absoluteTimeRef.current;
-      const prewarmSession = newSessionToken();
-      const directUpgrade = target === "original" && !compatible;
-      const prewarm = directUpgrade
-        ? `/api/debrid/stream/${id}/${file}`
-        : `/api/debrid/transcode/${id}/${file}?session=${prewarmSession}&start=${targetAt}&quality=${target}${audio !== undefined ? `&audio=${audio}` : ""}&sync=${preferences.audioSync}${copyCompatibleVideo && target === "original" ? "&video=copy" : ""}`;
-      try {
-        const response = await fetch(prewarm, {
-          headers: { Range: "bytes=0-1048575" },
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        await response.body?.cancel();
-        if (!directUpgrade)
-          await releaseTranscoderSession(fetch, id, file, prewarmSession);
-        if (cancelled || !playing) return;
-        const switchAt = absoluteTimeRef.current;
-        persistRef.current(switchAt);
-        stopRef.current();
-        setLoading(true);
-        setError(false);
-        setErrorMessage("");
-        setLocalTime(0);
-        setOffset(switchAt);
-        setCompatible(!directUpgrade);
-        setBootstrap(false);
-        setRendition(target);
-        setSession(newSessionToken());
-      } catch (reason) {
-        if (!directUpgrade)
-          await releaseTranscoderSession(fetch, id, file, prewarmSession).catch(
-            () => undefined,
-          );
-        autoUpgradeRequested.current = false;
-        console.warn("[playback] maximum quality prewarm failed", reason);
-      }
-    }, 4_000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [audio, compatible, copyCompatibleVideo, file, id, iosPlayback, loading, playing, preferences.audioSync, qualityMode, rendition, sourceHeight, transcoded]);
+    const target = autoQualityUpgradeTarget({
+      bootstrap: sessionConfiguration.bootstrap,
+      nativeHlsPlayback,
+      sustainedCompatibility,
+      loading,
+      playing,
+      qualityMode,
+      rendition: sessionConfiguration.rendition,
+      sourceHeight,
+      transcoded,
+    });
+    if (!target || autoUpgradeRequested.current === target) return;
+    const timer = setTimeout(() => {
+      promoteAutoQuality(target);
+    }, BOOTSTRAP_PROMOTION_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading, nativeHlsPlayback, playing, promoteAutoQuality, qualityMode, sessionConfiguration.bootstrap, sessionConfiguration.rendition, sourceHeight, sustainedCompatibility, transcoded]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -764,7 +1331,7 @@ export default function StreamingPlayer({
         video.current.muted = !video.current.muted;
         setVolume(video.current.muted ? 0 : video.current.volume);
       }
-      if (event.key.toLowerCase() === "n" && next) playNext();
+      if (event.key.toLowerCase() === "n" && next) void playNext();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -774,6 +1341,7 @@ export default function StreamingPlayer({
     const leave = () => persistRef.current();
     window.addEventListener("pagehide", leave);
     return () => {
+      navigationGeneration.current += 1;
       window.removeEventListener("pagehide", leave);
       requests.invalidate();
       persistRef.current();
@@ -785,6 +1353,8 @@ export default function StreamingPlayer({
       className={`player-shell ${controls || !playing ? "controls-visible" : ""} ${surfaces.dimVideo ? "video-dimmed" : ""} subtitle-${subtitleSize}`}
       data-playback-phase={effectiveBootstrap ? "bootstrap" : "standard"}
       data-playback-quality={activeQuality}
+      data-playback-state={error ? "error" : loading ? "loading" : playing ? "playing" : "paused"}
+      data-source-height={sourceHeight || undefined}
       data-playback-surface={
         surfaces.showError
           ? "error"
@@ -816,13 +1386,23 @@ export default function StreamingPlayer({
     >
       <video
         ref={video}
-        src={iosPlayback && Hls.isSupported() ? undefined : source}
-        autoPlay
+        // React must not reassign a native iOS HLS source after the activation
+        // handler sets it. WebKit treats that second assignment as a new,
+        // non-gesture load and can stall before its first segment.
+        src={iosPlayback ? undefined : source}
+        autoPlay={!iosPlayback}
+        // Finite native-VOD chunks expose only their short local duration to
+        // WebKit's built-in scrubber. Kheyflix's accessible controls use the
+        // full title duration and route every seek through a fresh immutable
+        // session, so they are the sole control surface on iPhone as well.
+        controls={false}
         muted={volume === 0}
         playsInline
         preload="auto"
         onLoadedMetadata={(event) => {
-          if (!transcoded && offset > 0) event.currentTarget.currentTime = offset;
+          recordNativeVodMetadata(source, event.currentTarget);
+          if (!transcoded && playbackOffset > 0)
+            event.currentTarget.currentTime = playbackOffset;
           const mobileAutoplay = requiresMutedAutoplay(navigator.userAgent);
           event.currentTarget.muted = mobileAutoplay || volume === 0;
           event.currentTarget.volume = mobileAutoplay ? 0 : volume;
@@ -833,6 +1413,11 @@ export default function StreamingPlayer({
             event.currentTarget.pause();
             return;
           }
+          // iPhone source assignment and play happen synchronously in the
+          // explicit activation handler. Replaying here is outside that
+          // trusted gesture and can make WebKit retain metadata without
+          // advancing to a media segment.
+          if (iosPlayback) return;
           void event.currentTarget.play().catch(() => {
             // Browsers may require a tap before audible playback. Keep audio
             // enabled so that the first user-initiated play starts with sound.
@@ -855,38 +1440,89 @@ export default function StreamingPlayer({
           setPlaying(false);
           persist();
         }}
+        onSeeking={(event) => {
+          if (nativeHlsSeekRotation.current) return;
+          const target = playbackOffset + event.currentTarget.currentTime;
+          if (
+            nativeHlsSeekAction({
+              current: absoluteTimeRef.current,
+              nativeHlsPlayback,
+              startedPlayback,
+              target,
+              transcoded,
+            }) !== "rotate-session"
+          )
+            return;
+          nativeHlsSeekRotation.current = true;
+          event.currentTarget.pause();
+          void replaceNativeHlsSession(target).then((applied) => {
+            if (!applied) nativeHlsSeekRotation.current = false;
+          });
+        }}
         onTimeUpdate={(event) => {
           const value = event.currentTarget.currentTime;
           setLocalTime(value);
           if (Date.now() - lastSaved.current > 5000) {
             lastSaved.current = Date.now();
-            persist(transcoded ? offset + value : value);
+            persist(transcoded ? playbackOffset + value : value);
           }
         }}
         onDurationChange={(event) => {
           if (!info?.duration && !transcoded)
             setNativeDuration(event.currentTarget.duration);
         }}
-        onLoadedData={() => setLoading(false)}
+        onLoadedData={(event) => {
+          // Native Safari can finish a source handoff with loadeddata but no
+          // fresh duration state update. Treat either ready event as enough
+          // evidence to prepare the next immutable VOD window.
+          recordNativeVodMetadata(source, event.currentTarget);
+          setLoading(false);
+        }}
         onCanPlay={(event) => {
+          recordNativeVodMetadata(source, event.currentTarget);
           startupRetries.current = 0;
           setLoading(false);
           if (!requiresMutedAutoplay(navigator.userAgent)) return;
           event.currentTarget.muted = true;
           event.currentTarget.volume = 0;
+          if (iosPlayback) return;
           void event.currentTarget.play().catch(() => {
             setPlaying(false);
             setControls(true);
           });
         }}
         onWaiting={() => {
+          if (startedPlayback && !bufferingStartedAt.current)
+            bufferingStartedAt.current = performance.now();
           setLoading(true);
         }}
         onPlaying={() => {
+          if (video.current) recordNativeVodMetadata(source, video.current);
+          const expectedNativeVodHandoff = nativeVodExpectedHandoff.current;
+          nativeVodExpectedHandoff.current = false;
+          nativeHlsSeekRotation.current = false;
+          nativeVodChunkTransition.current = false;
           startupRetries.current = 0;
+          startupSettled.current = true;
+          if (startupTimer.current !== undefined) {
+            clearTimeout(startupTimer.current);
+            startupTimer.current = undefined;
+          }
+          hlsRecoveryAttempts.current = 0;
+          nativeHlsRecoverySession.current = undefined;
           setPlaying(true);
           setLoading(false);
           setStartedPlayback(true);
+          if (bufferingStartedAt.current) {
+            const elapsed = performance.now() - bufferingStartedAt.current;
+            bufferingStartedAt.current = 0;
+            if (expectedNativeVodHandoff)
+              reportPlayback("native_vod_handoff", elapsed);
+            else {
+              rebufferCount.current += 1;
+              reportPlayback("rebuffer", elapsed);
+            }
+          }
           const element = video.current;
           if (!firstFrameRecorded.current && element) {
             const record = () => {
@@ -894,6 +1530,7 @@ export default function StreamingPlayer({
               firstFrameRecorded.current = true;
               const elapsed = performance.now() - playbackRequestedAt.current;
               setFirstFrameMs(elapsed);
+              reportPlayback("first_frame", elapsed);
               console.info("[playback] first frame", {
                 milliseconds: Math.round(elapsed),
                 phase: effectiveBootstrap ? "bootstrap" : "standard",
@@ -905,11 +1542,58 @@ export default function StreamingPlayer({
             else requestAnimationFrame(record);
           }
         }}
-        onEnded={() => {
+        onEnded={(event) => {
+          if (terminalPlaybackFailure.current) return;
+          if (effectiveBootstrap && transcoded) {
+            // Bootstrap is intentionally capped at 30 seconds, so its EOF is
+            // never evidence that the title finished. Promote from the exact
+            // current position rather than recording a false completion.
+            promoteAutoQuality(
+              bestAutoQuality(sourceHeight),
+              playbackOffset + event.currentTarget.currentTime,
+            );
+            return;
+          }
+          const currentTime = Number.isFinite(event.currentTarget.currentTime)
+            ? event.currentTarget.currentTime
+            : 0;
+          const actualChunkDuration = Number.isFinite(event.currentTarget.duration)
+            ? event.currentTarget.duration
+            : currentTime;
+          const absolutePosition = playbackOffset + currentTime;
+          if (
+            nativeVodChunkEndAction({
+              absolutePosition,
+              actualChunkDuration,
+              nativeHlsPlayback,
+              titleDuration: duration,
+              transcoded,
+            }) === "next-chunk"
+          ) {
+            if (nativeVodChunkTransition.current) return;
+            nativeVodChunkTransition.current = true;
+            nativeVodExpectedHandoff.current = true;
+            const prepared = nativeVodPrewarm.current;
+            const transition =
+              prepared && Math.abs(prepared.start - absolutePosition) < 0.5
+                ? { session: prepared.session, skipCurrentStop: true }
+                : undefined;
+            if (transition) {
+              nativeVodPrewarm.current = undefined;
+              nativeVodPrewarmGeneration.current += 1;
+              nativeVodPrewarmPending.current = false;
+            }
+            void replaceNativeHlsSession(absolutePosition, transition).then((applied) => {
+              if (!applied) nativeVodChunkTransition.current = false;
+            });
+            return;
+          }
           persist(duration);
           setPlaying(false);
+          if (transcoded) stop();
         }}
         onError={(event) => {
+          if (terminalPlaybackFailure.current) return;
           const element = event.currentTarget;
           console.error("[playback] media error", {
             id,
@@ -921,24 +1605,59 @@ export default function StreamingPlayer({
             readyState: element.readyState,
             networkState: element.networkState,
           });
+          reportPlayback("failure", performance.now() - playbackRequestedAt.current);
           if (!transcoded) {
-            setCompatible(true);
-            setSession(newSessionToken());
-          } else if (qualityMode === "auto" && rendition === "480" && !compatible) {
-            restart(absoluteTime, audio, "original");
+            restart(absoluteTime, audio, "480", {
+              bootstrap: false,
+              compatible: true,
+            });
+          } else if (nativeHlsPlayback) {
+            // A source handoff can finish with an immediate error before
+            // WebKit emits `playing`. Suppress duplicate errors only for the
+            // exact failed session, not for its replacement.
+            if (nativeHlsRecoverySession.current === activeSession) return;
+            const recovery = nativeHlsRecoveryAction(hlsRecoveryAttempts.current);
+            if (recovery === "rotate-session") {
+              hlsRecoveryAttempts.current += 1;
+              nativeHlsRecoverySession.current = activeSession;
+              nativeVodChunkTransition.current = true;
+              nativeVodExpectedHandoff.current = false;
+              const position = absoluteTimeRef.current;
+              void replaceNativeHlsSession(position).then((applied) => {
+                if (!applied) nativeVodChunkTransition.current = false;
+              });
+              return;
+            }
+            setLoading(false);
+            setErrorMessage("The Apple-compatible stream could not recover. Your place has been saved.");
+            setError(true);
+            stop();
+          } else if (
+            qualityMode === "auto" &&
+            rendition === "480" &&
+            effectiveBootstrap
+          ) {
+            // A bootstrap decode failure is not a reason to keep reissuing
+            // bootstrap. Move to the direct source when possible, or to a
+            // sustained compatible rendition for media that already requires
+            // transcoding.
+            restart(absoluteTime, audio, compatible ? "480" : "original", {
+              bootstrap: false,
+            });
           } else {
             setLoading(false);
             setError(true);
+            if (transcoded) stop();
           }
         }}
       >
-        {!compatible && !iosPlayback && subtitle !== undefined && (
+        {activeSubtitle !== undefined && (
           <track
-            key={subtitle}
+            key={activeSubtitle}
             kind="subtitles"
-            src={`/api/debrid/subtitle/${id}/${file}/${subtitle}?start=${transcoded ? offset : 0}`}
+            src={`/api/debrid/subtitle/${id}/${file}/${activeSubtitle}?start=${transcoded ? playbackOffset : 0}`}
             srcLang={
-              info?.subtitles.find((track) => track.index === subtitle)
+              info?.subtitles.find((track) => track.index === activeSubtitle)
                 ?.language || "en"
             }
             default
@@ -951,9 +1670,18 @@ export default function StreamingPlayer({
           onClick={(event) => {
             event.stopPropagation();
             const element = video.current;
-            if (!element) return;
+            if (!element || !resolvedSource) return;
             element.muted = true;
             element.volume = 0;
+            if (iosPlayback && !iosSourceActivated) {
+              // Do not defer this assignment to React's next render: WebKit
+              // preserves the user activation only for this synchronous
+              // handler, and native HLS needs the source attached inside it.
+              element.src = resolvedSource;
+              element.load();
+              attachedIosSource.current = resolvedSource;
+              setIosSourceActivated(true);
+            }
             void element.play().catch(() => setControls(true));
           }}
         >
@@ -1006,6 +1734,13 @@ export default function StreamingPlayer({
           <div>
             <button
               onClick={() => {
+                terminalPlaybackFailure.current = false;
+                hlsRecoveryAttempts.current = 0;
+                nativeHlsRecoverySession.current = undefined;
+                nativeVodChunkTransition.current = false;
+                setError(false);
+                setErrorMessage("");
+                setLoading(true);
                 setMediaInfoAttempt((attempt) => attempt + 1);
                 restart(absoluteTime);
               }}
@@ -1028,8 +1763,10 @@ export default function StreamingPlayer({
           <strong>{playbackTitle}</strong>
           <span>
             {info?.video[0]
-              ? `${qualityMode === "auto" ? `Auto · ${rendition === "original" ? "Original" : `${rendition}p`}` : rendition === "original" ? "Original" : `${rendition}p`} · ${info.video[0].codec.toUpperCase()}`
-              : "Kheyflix Streaming"}
+              ? `${effectiveBootstrap ? "Starting · 360p" : qualityMode === "auto" ? `Auto · ${rendition === "original" ? "Original" : `${rendition}p`}` : rendition === "original" ? "Original" : `${rendition}p`} · ${info.video[0].codec.toUpperCase()}`
+              : effectiveBootstrap
+                ? "Starting · 360p"
+                : "Kheyflix Streaming"}
           </span>
         </div>
       </div>
@@ -1185,8 +1922,10 @@ export default function StreamingPlayer({
                       localStorage.setItem(AUDIO_LANGUAGE_KEY, audioLanguage);
                       updatePreferences({ audioLanguage });
                       setMenu(null);
-                      setCompatible(true);
-                      restart(absoluteTime, track.index);
+                      setAudio(track.index);
+                      restart(absoluteTime, track.index, rendition, {
+                        compatible: true,
+                      });
                     }}
                   >
                     {languageName(track.language)}{" "}
@@ -1199,9 +1938,9 @@ export default function StreamingPlayer({
             ) : menu === "subtitles" ? (
               <>
                 <h3>Subtitles</h3>
-                <button
-                  className={subtitle === undefined ? "active" : ""}
-                  onClick={() => {
+              <button
+                className={subtitle === undefined ? "active" : ""}
+                onClick={() => {
                     setSubtitle(undefined);
                     updatePreferences({ subtitleLanguage: null });
                   }}
@@ -1247,7 +1986,9 @@ export default function StreamingPlayer({
               <>
                 <h3>Video quality</h3>
                 <p className="quality-hint">
-                  Auto starts light and raises quality while playback stays smooth.
+                  {nativeHlsPlayback
+                    ? "Auto prioritizes uninterrupted Apple playback at 480p."
+                    : "Auto starts light and raises quality while playback stays smooth."}
                 </p>
                 {(["auto", ...availableQualities(sourceHeight)] as QualityMode[]).map(
                   (value) => (
@@ -1259,7 +2000,10 @@ export default function StreamingPlayer({
                         setQualityMode(value);
                         updatePreferences({ qualityMode: value });
                         setBootstrap(false);
-                        restart(absoluteTime, audio, nextQuality);
+                        setRendition(nextQuality);
+                        restart(absoluteTime, audio, nextQuality, {
+                          bootstrap: false,
+                        });
                       }}
                     >
                       <span>
@@ -1315,8 +2059,10 @@ export default function StreamingPlayer({
                         Math.round((preferences.audioSync - 0.1) * 10) / 10,
                       );
                       updatePreferences({ audioSync });
-                      setCompatible(true);
-                      restart(absoluteTime);
+                      restart(absoluteTime, audio, rendition, {
+                        compatible: true,
+                        sync: audioSync,
+                      });
                     }}
                   >
                     Voice earlier
@@ -1324,8 +2070,10 @@ export default function StreamingPlayer({
                   <button
                     onClick={() => {
                       updatePreferences({ audioSync: 0 });
-                      setCompatible(true);
-                      restart(absoluteTime);
+                      restart(absoluteTime, audio, rendition, {
+                        compatible: true,
+                        sync: 0,
+                      });
                     }}
                   >
                     Reset
@@ -1337,8 +2085,10 @@ export default function StreamingPlayer({
                         Math.round((preferences.audioSync + 0.1) * 10) / 10,
                       );
                       updatePreferences({ audioSync });
-                      setCompatible(true);
-                      restart(absoluteTime);
+                      restart(absoluteTime, audio, rendition, {
+                        compatible: true,
+                        sync: audioSync,
+                      });
                     }}
                   >
                     Voice later

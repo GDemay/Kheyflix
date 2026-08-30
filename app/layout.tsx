@@ -19,6 +19,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link
+          rel="preload"
+          as="image"
+          href="/kheyflix-hero.jpg"
+          type="image/jpeg"
+          fetchPriority="high"
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

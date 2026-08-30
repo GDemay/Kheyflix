@@ -32,6 +32,7 @@ test("the loader reveals a continuously advancing live catalog stream", async ({
     .not.toBeNull();
 
   const firstFrameMs = Number(await player.getAttribute("data-first-frame-ms"));
+  console.info(`[live-loader] first decoded frame: ${firstFrameMs}ms`);
   expect(firstFrameMs).toBeLessThan(10_000);
   if (await video.evaluate((element) => element.paused)) {
     await page.getByRole("button", { name: "Play", exact: true }).click();

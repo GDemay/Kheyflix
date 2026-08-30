@@ -18,7 +18,11 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
   await page.goto(playbackPath, { waitUntil: "domcontentloaded" });
 
   const video = page.locator("video");
-  await expect(video).toBeVisible();
+  // The full local app/transcoder topology can spend a few seconds compiling
+  // its first route. The decoded-frame budget below remains strict; this only
+  // prevents cold development-server startup from hiding the actual playback
+  // assertion behind Playwright's generic five-second locator timeout.
+  await expect(video).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByText("Preparing compatible playback…")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Back 10 seconds" })).toBeVisible();
@@ -28,6 +32,11 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
       timeout: 30_000,
     })
     .toBeGreaterThanOrEqual(2);
+  await expect(page.locator("main.player-shell")).toHaveAttribute(
+    "data-playback-quality",
+    "bootstrap",
+  );
+  await expect(page.locator(".player-top span")).toContainText("Starting · 360p");
   await expect(page.getByRole("status")).toBeHidden({ timeout: 30_000 });
   await expect
     .poll(
@@ -86,8 +95,17 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   }
   expect(checkpoints.at(-1)! - checkpoints[0]).toBeGreaterThan(12);
-  // A native-compatible source is already original quality even when an
-  // optional transcoder prewarm remains in its internal bootstrap phase.
+  // Bootstrap is only for the first frame. Auto must promote to the source
+  // quality while the user is watching, rather than remaining at startup HD.
+  console.info(
+    "[playback] automatic-quality state:",
+    await page.locator("main.player-shell").evaluate((element) => ({
+      phase: element.getAttribute("data-playback-phase"),
+      quality: element.getAttribute("data-playback-quality"),
+      sourceHeight: element.getAttribute("data-source-height"),
+      state: element.getAttribute("data-playback-state"),
+    })),
+  );
   await expect(page.locator(".player-top span")).toContainText(
     "Auto · Original",
     { timeout: 20_000 },

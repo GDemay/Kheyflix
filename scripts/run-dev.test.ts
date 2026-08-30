@@ -1,8 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
   isKheyflixApp,
+  loadLocalEnvironment,
   resolveDevEnvironment,
 } from "./run-dev-support.mjs";
 
@@ -10,6 +14,7 @@ type PortProbe = (startPort?: number) => Promise<number>;
 
 const servers: ReturnType<typeof createServer>[] = [];
 const sockets = new Set<import("node:net").Socket>();
+const directories: string[] = [];
 
 afterEach(async () => {
   for (const socket of sockets) socket.destroy();
@@ -18,6 +23,11 @@ afterEach(async () => {
     servers.splice(0).map(
       (server) =>
         new Promise<void>((resolve) => server.close(() => resolve())),
+    ),
+  );
+  await Promise.all(
+    directories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
     ),
   );
 });
@@ -84,6 +94,29 @@ const serveAppHealth = async (
 };
 
 describe("development process environment", () => {
+  test("passes local runtime configuration to both app and transcoder children", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kheyflix-local-env-"));
+    directories.push(directory);
+    const envFile = join(directory, ".env.local");
+    await writeFile(
+      envFile,
+      "KHEYFLIX_INTERNAL_TRANSCODER_TOKEN=from-local-file\nPROWLARR_URL=http://prowlarr.railway.internal:9696\n",
+      { mode: 0o600 },
+    );
+
+    const environment = await loadLocalEnvironment(
+      { KHEYFLIX_INTERNAL_TRANSCODER_TOKEN: "explicit-shell-value" },
+      envFile,
+    );
+
+    expect(environment.KHEYFLIX_INTERNAL_TRANSCODER_TOKEN).toBe(
+      "explicit-shell-value",
+    );
+    expect(environment.PROWLARR_URL).toBe(
+      "http://prowlarr.railway.internal:9696",
+    );
+  });
+
   test("does not start a duplicate when the Kheyflix app is already healthy", async () => {
     const appProbe = async () => true;
 
@@ -91,6 +124,7 @@ describe("development process environment", () => {
 
     expect(result.startApp).toBe(false);
     expect(result.env.PORT).toBe("3000");
+    expect(result.env.KHEYFLIX_LOCAL_RUNTIME).toBe("railway");
   });
 
   test("recognizes a running Kheyflix app whose optional discovery service is degraded", async () => {
@@ -125,6 +159,7 @@ describe("development process environment", () => {
 
     expect(startTranscoder).toBe(true);
     expect(env.PORT).toBe("3000");
+    expect(env.KHEYFLIX_LOCAL_RUNTIME).toBe("railway");
     expect(env.KHEYFLIX_APP_ORIGIN).toBe("http://localhost:3000");
     expect(env.KHEYFLIX_TRANSCODER_PORT).not.toBe(String(defaultPort));
     expect(env.KHEYFLIX_TRANSCODER_URL).toBe(

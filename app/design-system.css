@@ -193,3 +193,75 @@ button { -webkit-tap-highlight-color: transparent; }
   html { scroll-behavior: auto; }
   .app-header, .media-card, .primary-action, .secondary-action { transition-duration: .001ms !important; }
 }
+
+/* Private viewing is a calm arrival moment, not a raw password prompt. */
+.access-gate {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: clamp(1.25rem, 5vw, 4rem);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--nf-white);
+  background:
+    radial-gradient(circle at 73% 16%, rgb(229 9 20 / 20%), transparent 28rem),
+    radial-gradient(circle at 18% 90%, rgb(99 10 20 / 30%), transparent 33rem),
+    #050505;
+}
+.access-gate::before,
+.access-gate::after {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  z-index: -2;
+  background: repeating-linear-gradient(112deg, transparent 0 5.6rem, rgb(255 255 255 / 2%) 5.7rem 5.74rem, transparent 5.84rem 11.3rem);
+  transform: rotate(-8deg);
+}
+.access-gate::after { inset: auto -15% -38% 20%; height: 70%; background: radial-gradient(ellipse, rgb(229 9 20 / 16%), transparent 65%); filter: blur(20px); }
+.access-gate__glow { position: absolute; width: min(65vw, 62rem); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgb(255 70 80 / 10%), transparent 64%); z-index: -1; }
+.access-gate__panel { width: min(100%, 31rem); padding: clamp(2rem, 6vw, 3.6rem); border: 1px solid rgb(255 255 255 / 12%); border-radius: 1rem; background: linear-gradient(145deg, rgb(27 27 30 / 88%), rgb(8 8 9 / 92%)); box-shadow: 0 2rem 6rem rgb(0 0 0 / 50%); backdrop-filter: blur(18px); }
+.access-gate__mark { width: 3.4rem; height: 4.55rem; display: grid; place-items: center; margin-bottom: 2rem; color: #fff; background: linear-gradient(145deg, #ff4d58, #a40610 58%, #450006); clip-path: polygon(0 0, 48% 0, 48% 34%, 76% 0, 100% 0, 66% 48%, 100% 100%, 75% 100%, 48% 63%, 48% 100%, 0 100%); filter: drop-shadow(0 .5rem 1.25rem rgb(229 9 20 / 35%)); }
+.access-gate__mark span { font-size: 0; }
+.access-gate__eyebrow { display: flex; align-items: center; gap: .45rem; margin: 0 0 .85rem; color: #ff9499; font-size: .72rem; font-weight: 750; letter-spacing: .16em; }
+.access-gate h1 { margin: 0; font-size: clamp(2rem, 6vw, 3rem); letter-spacing: -.04em; line-height: .98; }
+.access-gate__panel > p:not(.access-gate__eyebrow):not(.access-gate__error) { margin: 1.1rem 0 0; color: var(--nf-muted); line-height: 1.55; }
+.access-gate form { display: grid; gap: .75rem; margin-top: 2rem; }
+.access-gate form label { color: var(--nf-copy); font-size: .86rem; font-weight: 650; }
+.access-gate__input { display: flex; align-items: center; gap: .7rem; min-height: 3.35rem; padding: 0 1rem; border: 1px solid rgb(255 255 255 / 18%); border-radius: .35rem; background: rgb(0 0 0 / 40%); color: #ff8d93; }
+.access-gate__input:focus-within { border-color: var(--nf-white); box-shadow: 0 0 0 2px rgb(255 255 255 / 16%); }
+.access-gate__input input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--nf-white); font: inherit; letter-spacing: .08em; }
+.access-gate__submit, .access-gate__retry { display: inline-flex; align-items: center; justify-content: center; gap: .55rem; min-height: 3.15rem; margin-top: .45rem; border: 0; border-radius: .35rem; background: var(--nf-red); color: #fff; font: inherit; font-weight: 750; cursor: pointer; transition: background-color .18s ease, transform .18s ease; }
+.access-gate__submit:hover:not(:disabled), .access-gate__retry:hover { background: var(--nf-red-hover); transform: translateY(-1px); }
+.access-gate__submit:disabled { opacity: .7; cursor: wait; }
+.access-gate__retry { margin-top: 1.75rem; padding: 0 1.1rem; background: rgb(255 255 255 / 14%); }
+.access-gate__error { margin: .1rem 0 0; color: #ff9fa5; font-size: .86rem; line-height: 1.4; }
+@media (max-width: 520px) { .access-gate__panel { padding: 1.65rem; border-radius: .7rem; } .access-gate__mark { margin-bottom: 1.5rem; } }
+
+/* The player module is loaded on intent. Keep that short handoff cinematic,
+   centered, and fully legible instead of flashing unstyled text. */
+.player-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #fff;
+  font-size: .78rem;
+  font-weight: 750;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  background:
+    radial-gradient(circle at 50% 52%, rgb(229 9 20 / 18%), transparent 24rem),
+    #030303;
+}
+
+/* Keep the high-resolution PNG for social cards; browsing uses this much
+   smaller JPEG rendition as the interactive hero/LCP asset. */
+.featured-hero::before { background-image: url('/kheyflix-hero.jpg'); }
+
+/* A failed stream must never trap a viewer in the player.  The recovery card
+   keeps its own controls interactive while letting the persistent top-level
+   Back action receive input through the full-screen error surface. */
+.player-shell .playback-error { pointer-events: none; }
+.player-shell .playback-error button { pointer-events: auto; }

@@ -1,3 +1,10 @@
-import KheyflixApp from '../kheyflix-app';
+import AccessGate from "../access-gate";
+import KheyflixApp from "../kheyflix-app";
 
-export default function CatchAllPage() { return <KheyflixApp/>; }
+export default function CatchAllPage() {
+  return (
+    <AccessGate>
+      <KheyflixApp />
+    </AccessGate>
+  );
+}

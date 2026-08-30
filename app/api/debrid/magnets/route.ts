@@ -1,4 +1,5 @@
 import { AllDebridError, listMagnetsCached, uploadMagnet } from '../../../lib/alldebrid';
+import { requireProviderAccess } from '../../../lib/access';
 import { observeApi, publicErrorMessage, writeRequestLog } from '../../../lib/observability';
 
 const failure = (request:Request,error:unknown) => {
@@ -8,11 +9,13 @@ const failure = (request:Request,error:unknown) => {
 };
 
 const handleGet = async (request:Request) => {
+  const blocked=await requireProviderAccess(request);if(blocked)return blocked;
   try { const result=await listMagnetsCached(new URL(request.url).searchParams.get('refresh')==='1');writeRequestLog('info','debrid.catalog.completed',request,{resultCount:result.magnets.length,cache:result.stale?'stale':result.cached?'hit':'miss'});return Response.json(result,{headers:{'Cache-Control':'private, max-age=60, stale-while-revalidate=300','X-Kheyflix-Cache':result.stale?'stale':result.cached?'hit':'miss'}}); }
   catch(error) { return failure(request,error); }
 };
 
 const handlePost = async (request:Request) => {
+  const blocked=await requireProviderAccess(request);if(blocked)return blocked;
   try {
     const body=await request.json() as {magnet?:string;rightsConfirmed?:boolean};
     if(body.rightsConfirmed!==true)return Response.json({error:{code:'RIGHTS_CONFIRMATION_REQUIRED',message:'Confirm that you are authorized to stream this content.'}},{status:400});

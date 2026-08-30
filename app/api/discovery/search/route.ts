@@ -1,7 +1,10 @@
 import { ProwlarrError, searchProwlarr } from "../../../lib/prowlarr";
+import { requireProviderAccess } from "../../../lib/access";
 import { observeApi, writeRequestLog } from "../../../lib/observability";
 
 const handleGet = async (request: Request) => {
+  const blocked = await requireProviderAccess(request);
+  if (blocked) return blocked;
   try {
     const query = new URL(request.url).searchParams.get("q") || "";
     const parameters = new URL(request.url).searchParams;

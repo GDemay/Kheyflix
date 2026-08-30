@@ -1,5 +1,14 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/debrid/magnets**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ magnets: [] }),
+    }),
+  );
+});
+
 test.describe("cinematic app startup", () => {
   test.use({ reducedMotion: "no-preference" });
 

@@ -1,15 +1,53 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProwlarrError, searchProwlarr } from "./prowlarr";
+import {
+  ProwlarrError,
+  clearProwlarrHealthForTests,
+  isProwlarrReady,
+  prowlarrAttemptTimeout,
+  searchProwlarr,
+} from "./prowlarr";
 
 afterEach(() => {
   delete process.env.PROWLARR_URL;
   delete process.env.PROWLARR_API_KEY;
+  clearProwlarrHealthForTests();
   vi.unstubAllGlobals();
 });
 
 describe("Prowlarr discovery", () => {
+  it("keeps two-attempt discovery inside one 15-second budget", () => {
+    expect(prowlarrAttemptTimeout(0, 0)).toBe(7_300);
+    expect(prowlarrAttemptTimeout(0, 7_500)).toBe(7_300);
+    expect(prowlarrAttemptTimeout(0, 14_999)).toBe(1);
+    expect(prowlarrAttemptTimeout(0, 15_000)).toBe(0);
+  });
+
   it("requires server-side configuration", async () => {
     await expect(searchProwlarr("Ubuntu")).rejects.toBeInstanceOf(ProwlarrError);
+  });
+
+  it("coalesces concurrent readiness probes instead of amplifying health traffic", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "server-only-key";
+    let resolveHealth: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveHealth = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const readiness = Promise.all([
+      isProwlarrReady(),
+      isProwlarrReady(),
+      isProwlarrReady(),
+    ]);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    resolveHealth?.(Response.json([]));
+
+    await expect(readiness).resolves.toEqual([true, true, true]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns only deduplicated magnet-backed results", async () => {
@@ -65,6 +103,27 @@ describe("Prowlarr discovery", () => {
       hostname: "prowlarr.railway.internal",
       port: "9696",
     });
+  });
+
+  it("retries one transient Prowlarr search failure before surfacing an outage", async () => {
+    process.env.PROWLARR_URL = "https://prowlarr.test";
+    process.env.PROWLARR_API_KEY = "key";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            title: "Retry.Movie.2026.1080p.WEB-DL.x264",
+            magnetUrl: "magnet:?xt=urn:btih:RETRY001",
+            categories: [{ id: 2000, name: "Movies" }],
+          },
+        ]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchProwlarr("Retry Movie", { kind: "movie" })).resolves.toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("scopes series searches to a selected season and episode", async () => {

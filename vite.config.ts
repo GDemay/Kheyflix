@@ -2,7 +2,7 @@ import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
-import hostingConfig from './.openai/hosting.json';
+import hostingConfig from './.openai/hosting.json' with { type: 'json' };
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -41,14 +41,28 @@ export default defineConfig(async () => {
   process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
 
-  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
-  const { cloudflare } = await import('@cloudflare/vite-plugin');
-
-  return {
+  const baseConfig = {
     css: { postcss: { plugins: [tailwindcss()] } },
+    // The relay's address-pinning dispatcher is Node-only and Undici ships a
+    // CommonJS entrypoint. Keep it external in Vinext development SSR so the
+    // Node runtime, rather than Vite's ESM evaluator, loads that entrypoint.
+    ssr: { external: ['undici'] },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
+  };
+
+  // The production app and its FFmpeg companion communicate over Railway's
+  // local service network. Cloudflare's Worker emulator cannot reach that
+  // loopback service, so local playback and CI deliberately use Vinext's Node
+  // runtime. Hosting builds retain the Sites/Cloudflare integration below.
+  if (process.env.KHEYFLIX_LOCAL_RUNTIME === 'railway')
+    return { ...baseConfig, plugins: [vinext()] };
+
+  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
+  const { cloudflare } = await import('@cloudflare/vite-plugin');
+  return {
+    ...baseConfig,
     plugins: [
       vinext(),
       sites(),

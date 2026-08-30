@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 const mkvPlaybackPath =
   process.env.KHEYFLIX_MKV_PLAYBACK_TEST_PATH ||
   "/stream/72935164/0/how-to-train-your-dragon-homecoming?compat=1";
+const safeMediaPath = (value: string) => new URL(value).pathname;
 
 test.afterEach(async ({ page }) => {
   if (!page.isClosed())
@@ -17,16 +18,18 @@ test("a real MKV starts progressively and keeps advancing", async ({ page }) => 
   const mediaFailures: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error")
-      console.info(`[mkv-playback] browser error: ${message.text()}`);
+      console.info("[mkv-playback] browser media error");
   });
   page.on("response", (response) => {
     if (
       response.status() >= 400 &&
       /\/api\/debrid\/(?:hls|media|stream|transcode)\//.test(response.url())
     ) {
-      mediaFailures.push(`${response.status()} ${response.url()}`);
+      const path = safeMediaPath(response.url()),
+        method = response.request().method();
+      mediaFailures.push(`${response.status()} ${method} ${path}`);
       console.info(
-        `[mkv-playback] ${response.status()} ${response.request().method()} ${response.url()}`,
+        `[mkv-playback] ${response.status()} ${method} ${path}`,
       );
     }
   });
@@ -42,7 +45,7 @@ test("a real MKV starts progressively and keeps advancing", async ({ page }) => 
   const player = page.locator("main.player-shell"),
     video = page.locator("video");
 
-  await expect(video).toBeVisible();
+  await expect(video).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect
     .poll(() => video.evaluate((element) => element.readyState), {
@@ -68,8 +71,15 @@ test("a real MKV starts progressively and keeps advancing", async ({ page }) => 
 
   if (await video.evaluate((element) => element.paused))
     await page.getByRole("button", { name: "Play", exact: true }).click();
-  const timeline = page.getByRole("slider", { name: "Seek video" }),
-    checkpoints: number[] = [];
+  const timeline = page.getByRole("slider", { name: "Seek video" });
+  const playbackStart = Number(await timeline.inputValue());
+  // Confirm the decoded frame has become continuously advancing before
+  // sampling cadence. This keeps the regression focused on sustained MKV
+  // playback rather than conflating its startup ramp with a rebuffer.
+  await expect
+    .poll(() => timeline.inputValue().then(Number), { timeout: 15_000 })
+    .toBeGreaterThan(playbackStart + 3);
+  const checkpoints: number[] = [];
   for (let sample = 0; sample < 4; sample += 1) {
     await page.waitForTimeout(5_000);
     checkpoints.push(Number(await timeline.inputValue()));

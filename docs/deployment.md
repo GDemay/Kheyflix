@@ -23,13 +23,19 @@ redeploy, staged-deploy acceptance, or an infrastructure-changing agent action.
 
 | Environment | URL | Deployment source | Purpose |
 | --- | --- | --- | --- |
-| Staging | <https://kheyflix-staging.up.railway.app> | Approved Railway MCP workflow | Pre-merge verification |
+| Staging | <https://kheyflix-staging.up.railway.app> | Approved Railway MCP workflow | Manual review only; no automated OIDC verifier is authorized yet |
 | Production | <https://kheyflix-production.up.railway.app> | Automatic deployment from `GDemay/Kheyflix` `main` | Public service |
 
 Production source remains `GDemay/Kheyflix` on `main`. Never use a fork or a
 local upload as a production source. If the MCP cannot perform a required
 staging or recovery operation, stop and report that capability gap rather than
 substituting another client.
+
+`npm run verify:production` is intentionally bound to the canonical `main`
+GitHub Actions identity and production audience. It must not be pointed at
+staging: doing so would either fail audience validation or weaken the
+production trust boundary. Add a staging verifier only with a separately
+reviewed deployment source and OIDC claim contract.
 
 ## Secrets and private dependencies
 
@@ -38,8 +44,10 @@ The canonical local runtime file is the ignored, mode-`0600`
 new worktree's ignored `.env.local` when local integration testing needs it.
 Never print, commit, place in browser code, or add secret values to a GitHub
 workflow. The required server-side provider values are AllDebrid and Prowlarr
-credentials; the access and internal-transcoder tokens are configured only in
-the approved secret store.
+credentials. Protected playback also requires all three distinct server-side
+access values in the approved secret store: `KHEYFLIX_ACCESS_TOKEN`,
+`KHEYFLIX_SESSION_SECRET`, and `KHEYFLIX_INTERNAL_TRANSCODER_TOKEN`. A partial
+set is intentionally reported as degraded and blocks provider-backed playback.
 
 Prowlarr runs privately on port 9696 with its persistent `/config` volume. The
 application reaches it through the private service address configured in its

@@ -1,11 +1,19 @@
 const BROWSER_SAFE_VIDEO_CODECS = new Set(["h264"]);
 
 const PROFILES = {
-  bootstrap: { height: 240, bitrate: "280k", maxrate: "420k", bufsize: "840k" },
+  // A 360p first frame is visibly credible on modern displays while remaining
+  // small enough for the single-thread, low-latency bootstrap encoder.
+  bootstrap: { height: 360, bitrate: "560k", maxrate: "800k", bufsize: "1600k" },
   "480": { height: 480, bitrate: "900k", maxrate: "1200k", bufsize: "2400k" },
   "720": { height: 720, bitrate: "2200k", maxrate: "3000k", bufsize: "6000k" },
   "1080": { height: 1080, bitrate: "4500k", maxrate: "6000k", bufsize: "12000k" },
 };
+
+// Fixed profiles deliberately avoid ffprobe at startup. Keep their fallback
+// dimensions in one place so the bootstrap encoder receives its actual
+// profile height instead of the historical 240p sentinel.
+export const fixedProfileHeight = (quality = "") =>
+  quality === "bootstrap" ? PROFILES.bootstrap.height : Number(quality);
 
 export function videoOutputOptions(codec = "", height = 0, allowCopy = false, quality = "compat", preciseSeek = false) {
   if (!preciseSeek && (quality === "original" || quality === "compat") && BROWSER_SAFE_VIDEO_CODECS.has(codec.toLowerCase())) return ["-c:v", "copy"];

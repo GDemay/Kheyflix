@@ -34,12 +34,10 @@ application, starts the web and transcoder processes together, checks
 Kheyflix has isolated `staging` and `production` Railway environments. Railway
 control-plane work is performed only through the configured Railway MCP; the
 tracked `npm run deploy:*` commands deliberately fail closed so a local checkout
-cannot upload or alter a service. Use public deployment checks only after an
-approved rollout:
-
-```sh
-npm run verify:staging
-```
+cannot upload or alter a service. The authenticated deployment verifier is
+production-only because its GitHub Actions identity is bound to canonical
+`main`; staging needs a separately approved OIDC trust contract before it can
+offer an equivalent automated check.
 
 Production automatically deploys canonical GitHub `main`. Run
 `npm run verify:production` and the real-catalog playback suite after every

@@ -1,7 +1,32 @@
 import http from "node:http";
 import net from "node:net";
+import { readFile } from "node:fs/promises";
+import { parseEnv } from "node:util";
 
 const host = "127.0.0.1";
+
+// Vinext loads .env.local for the application process, but the companion
+// transcoder is a separate Node process. Merge the same local runtime config
+// before spawning either child, while allowing an explicit shell value to win.
+// Values remain in process memory only and are never logged by this module.
+export const loadLocalEnvironment = async (
+  sourceEnv = process.env,
+  envFile = ".env.local",
+) => {
+  try {
+    const parsed = parseEnv(await readFile(envFile, "utf8"));
+    return { ...parsed, ...sourceEnv };
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )
+      return { ...sourceEnv };
+    throw error;
+  }
+};
 
 const canListen = (port) =>
   new Promise((resolve) => {
@@ -107,6 +132,10 @@ export const resolveDevEnvironment = async (
       PORT: appPort,
       KHEYFLIX_APP_ORIGIN:
         sourceEnv.KHEYFLIX_APP_ORIGIN || `http://localhost:${appPort}`,
+      // Kheyflix production is a Railway app plus a loopback transcoder, not
+      // a Cloudflare Worker. Keep local development on that same topology so
+      // playback tests can exercise the actual media service.
+      KHEYFLIX_LOCAL_RUNTIME: sourceEnv.KHEYFLIX_LOCAL_RUNTIME || "railway",
       KHEYFLIX_TRANSCODER_PORT: transcoderPort,
       KHEYFLIX_TRANSCODER_URL:
         sourceEnv.KHEYFLIX_TRANSCODER_URL ||
