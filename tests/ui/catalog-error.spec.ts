@@ -5,7 +5,7 @@ test("invalid catalog responses survive Discover navigation without a React cras
 }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.route("**/api/debrid/magnets", async (route) => {
+  await page.route("**/api/debrid/magnets**", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

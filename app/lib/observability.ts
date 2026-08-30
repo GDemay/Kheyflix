@@ -114,6 +114,7 @@ const eventMessage = (event: string, request: Request, context: LogContext) => {
   if (event === "discovery.search.completed") return "Catalog search completed";
   if (event === "debrid.catalog.completed") return "Library loaded";
   if (event === "debrid.magnet.upload.completed") return "Title added to library";
+  if (event === "playback.telemetry.received") return "Playback telemetry recorded";
   if (event === "metadata.lookup.degraded")
     return "Title details unavailable; continuing without them";
   return `${operationName(new URL(request.url).pathname, request.method)} failed${status}`;

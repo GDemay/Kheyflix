@@ -1,7 +1,87 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
+const visualCatalog = {
+  magnets: [
+    {
+      id: 101,
+      filename: "Friends.S01.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_006,
+      videoFiles: [
+        {
+          index: 0,
+          name: "Friends.S01E01.The.One.Where.Monica.Gets.a.Roommate.mkv",
+          size: 1_200_000_000,
+          path: "Friends/S01E01.mkv",
+        },
+      ],
+    },
+    {
+      id: 102,
+      filename: "The.Mentalist.S01.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_005,
+      videoFiles: [
+        {
+          index: 0,
+          name: "The.Mentalist.S01E01.Red.Johns.Footsteps.mkv",
+          size: 1_100_000_000,
+          path: "The Mentalist/S01E01.mkv",
+        },
+      ],
+    },
+    {
+      id: 103,
+      filename: "Shrek.2001.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_004,
+      videoFiles: [
+        { index: 0, name: "Shrek.2001.mp4", size: 1_000_000_000, path: "Shrek.mp4" },
+      ],
+    },
+    {
+      id: 104,
+      filename: "Shrek.2.2004.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_003,
+      videoFiles: [
+        { index: 0, name: "Shrek.2.2004.mp4", size: 1_050_000_000, path: "Shrek 2.mp4" },
+      ],
+    },
+    {
+      id: 105,
+      filename: "Arrival.2016.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_002,
+      videoFiles: [
+        { index: 0, name: "Arrival.2016.mkv", size: 1_150_000_000, path: "Arrival.mkv" },
+      ],
+    },
+    {
+      id: 106,
+      filename: "The.Last.of.Us.S01.1080p",
+      statusCode: 4,
+      uploadDate: 1_700_000_001,
+      videoFiles: [
+        {
+          index: 0,
+          name: "The.Last.of.Us.S01E01.When.Youre.Lost.in.the.Darkness.mkv",
+          size: 1_250_000_000,
+          path: "The Last of Us/S01E01.mkv",
+        },
+      ],
+    },
+  ],
+};
+
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/debrid/magnets**", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(visualCatalog) }),
+  );
+  await page.route("**/api/metadata**", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify({ metadata: null }) }),
+  );
   await page.goto("/");
   await page.waitForLoadState("domcontentloaded");
   await page.locator(".app-header").waitFor({ state: "visible", timeout: 30_000 });

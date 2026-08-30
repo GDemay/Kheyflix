@@ -13,26 +13,27 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "vitest run --config vitest.config.ts",
     "test:ui": "playwright test",
+    "test:ui:smoke": "playwright test tests/ui/access-gate.spec.ts tests/ui/catalog-error.spec.ts tests/ui/player-preferences.spec.ts tests/ui/player-recovery.spec.ts tests/ui/provider-failure.spec.ts tests/ui/responsive.spec.ts tests/ui/startup-intro.spec.ts",
     "test:playback:production": "PLAYWRIGHT_BASE_URL=https://kheyflix-production.up.railway.app playwright test tests/ui/playback.spec.ts tests/ui/mkv-playback.spec.ts --project=phone --project=laptop",
     "test:ui:update": "playwright test --update-snapshots",
     "deploy:staging": "node scripts/deploy.mjs staging",
     "deploy:production": "node scripts/deploy.mjs production",
-    "verify:staging": "node scripts/verify-deployment.mjs staging",
     "verify:production": "node scripts/verify-deployment.mjs production",
     "github": "node scripts/gh-kheyflix.mjs",
     "github:setup": "node scripts/gh-kheyflix.mjs --setup"
   },
   "dependencies": {
-    "hls.js": "^1.7.1",
+    "jose": "^6.2.10",
     "lucide-react": "^0.468.0",
     "next": "^16.3.2",
-    "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "undici": "7.29.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@cloudflare/vite-plugin": "1.37.1",
-    "@cloudflare/workers-types": "4.20260515.1",
+    "@cloudflare/vite-plugin": "1.54.2",
+    "@cloudflare/workers-types": "5.20260828.1",
     "@openai/sites-vite-plugin": "^0.1.0 || ^0.2.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.2.1",
@@ -40,18 +41,18 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
+    "@vitejs/plugin-rsc": "0.5.34",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "ffmpeg-static": "^5.3.0",
     "ffprobe-static": "^3.1.0",
-    "react-server-dom-webpack": "19.2.6",
+    "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vinext": "1.0.0-beta.3",
-    "vite": "8.0.13",
+    "vinext": "1.0.0-beta.8",
+    "vite": "8.2.2",
     "vitest": "^4.1.11",
-    "wrangler": "4.92.0"
+    "wrangler": "4.127.1"
   },
   "type": "module"
 }

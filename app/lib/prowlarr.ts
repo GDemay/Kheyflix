@@ -4,6 +4,17 @@ const DEFAULT_LIMIT = 30;
 const MAX_MOVIE_VALIDATION_REQUESTS = 12;
 const MAX_MOVIE_CANDIDATES = Math.floor(MAX_MOVIE_VALIDATION_REQUESTS / 2);
 const MOVIE_VALIDATION_CONCURRENCY = 3;
+const PROWLARR_REQUEST_TIMEOUT_MS = 15_000;
+const PROWLARR_RETRY_DELAY_MS = 200;
+const PROWLARR_REQUEST_ATTEMPT_MAX_MS = 7_300;
+const PROWLARR_HEALTH_TIMEOUT_MS = 2_000;
+const PROWLARR_HEALTH_FRESH_MS = 60_000;
+
+type ProwlarrHealthCacheEntry = { value: boolean; updatedAt: number };
+const shared = globalThis as typeof globalThis & {
+  __kheyflixProwlarrHealth?: ProwlarrHealthCacheEntry;
+  __kheyflixProwlarrHealthRequest?: Promise<boolean>;
+};
 
 export class ProwlarrError extends Error {
   constructor(
@@ -46,6 +57,21 @@ export type DiscoverySearchOptions = {
   episode?: number;
 };
 
+const waitForRetry = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+export const prowlarrAttemptTimeout = (
+  startedAt: number,
+  now = performance.now(),
+) => {
+  const remaining = PROWLARR_REQUEST_TIMEOUT_MS - (now - startedAt);
+  if (remaining <= 0) return 0;
+  return Math.max(
+    1,
+    Math.floor(Math.min(PROWLARR_REQUEST_ATTEMPT_MAX_MS, remaining)),
+  );
+};
+
 const configuration = () => {
   const rawUrl = process.env.PROWLARR_URL?.trim();
   const apiKey = process.env.PROWLARR_API_KEY?.trim();
@@ -79,18 +105,45 @@ const configuration = () => {
 };
 
 export async function isProwlarrReady() {
-  try {
-    const { baseUrl, apiKey } = configuration();
-    const response = await fetch(new URL(`${baseUrl}/api/v1/health`), {
-      headers: { "X-Api-Key": apiKey, Accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(2_000),
-    });
-    return response.ok;
-  } catch {
+  if (!process.env.PROWLARR_URL?.trim() || !process.env.PROWLARR_API_KEY?.trim())
     return false;
-  }
+  const now = Date.now(), cached = shared.__kheyflixProwlarrHealth;
+  if (
+    process.env.NODE_ENV !== "test" &&
+    cached &&
+    now - cached.updatedAt < PROWLARR_HEALTH_FRESH_MS
+  )
+    return cached.value;
+  if (shared.__kheyflixProwlarrHealthRequest)
+    return shared.__kheyflixProwlarrHealthRequest;
+  const healthRequest = (async () => {
+    try {
+      const { baseUrl, apiKey } = configuration();
+      const response = await fetch(new URL(`${baseUrl}/api/v1/health`), {
+        headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(PROWLARR_HEALTH_TIMEOUT_MS),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  })()
+    .then((value) => {
+      shared.__kheyflixProwlarrHealth = { value, updatedAt: Date.now() };
+      return value;
+    })
+    .finally(() => {
+      shared.__kheyflixProwlarrHealthRequest = undefined;
+    });
+  shared.__kheyflixProwlarrHealthRequest = healthRequest;
+  return healthRequest;
 }
+
+export const clearProwlarrHealthForTests = () => {
+  shared.__kheyflixProwlarrHealth = undefined;
+  shared.__kheyflixProwlarrHealthRequest = undefined;
+};
 
 const categoryFor = (release: ProwlarrRelease) => {
   const categories = release.categories || [];
@@ -304,22 +357,52 @@ export async function searchProwlarr(query: string, options: DiscoverySearchOpti
   url.searchParams.set("limit", String(DEFAULT_LIMIT));
   if (options.kind) url.searchParams.set("categories", options.kind === "movie" ? "2000" : "5000");
   const requestReleases = async (requestUrl: URL) => {
-    const response = await fetch(requestUrl, {
-      headers: { "X-Api-Key": apiKey, Accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok)
-      throw new ProwlarrError(
-        response.status === 401 || response.status === 403
-          ? "Discovery credentials were rejected."
-          : "Discovery is temporarily unavailable.",
-        response.status === 401 || response.status === 403
-          ? "PROWLARR_UNAUTHORIZED"
-          : "PROWLARR_UNAVAILABLE",
-        response.status === 401 || response.status === 403 ? 503 : 502,
-      );
-    return (await response.json()) as ProwlarrRelease[];
+    const startedAt = performance.now();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const timeout = prowlarrAttemptTimeout(startedAt);
+      if (!timeout) break;
+      try {
+        const response = await fetch(requestUrl, {
+          headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+          cache: "no-store",
+          // Each signal shares one deadline rather than allowing two full
+          // request windows plus a retry delay to exceed the UX budget.
+          signal: AbortSignal.timeout(timeout),
+        });
+        if (response.ok) return (await response.json()) as ProwlarrRelease[];
+        const unauthorized = response.status === 401 || response.status === 403,
+          transient = response.status === 429 || response.status >= 500;
+        if (
+          transient &&
+          attempt === 0 &&
+          prowlarrAttemptTimeout(startedAt) > PROWLARR_RETRY_DELAY_MS
+        ) {
+          await waitForRetry(PROWLARR_RETRY_DELAY_MS);
+          continue;
+        }
+        throw new ProwlarrError(
+          unauthorized
+            ? "Discovery credentials were rejected."
+            : "Discovery is temporarily unavailable.",
+          unauthorized ? "PROWLARR_UNAUTHORIZED" : "PROWLARR_UNAVAILABLE",
+          unauthorized ? 503 : 502,
+        );
+      } catch (error) {
+        if (error instanceof ProwlarrError) throw error;
+        if (
+          attempt === 0 &&
+          prowlarrAttemptTimeout(startedAt) > PROWLARR_RETRY_DELAY_MS
+        ) {
+          await waitForRetry(PROWLARR_RETRY_DELAY_MS);
+          continue;
+        }
+      }
+    }
+    throw new ProwlarrError(
+      "Discovery is temporarily unavailable.",
+      "PROWLARR_UNAVAILABLE",
+      502,
+    );
   };
   const seen = new Set<string>();
   const normalize = async (

@@ -1,9 +1,12 @@
 import { AllDebridError } from "../../../../../../lib/alldebrid";
+import { requireProviderAccess } from "../../../../../../lib/access";
 import { observeApi, publicErrorMessage, writeRequestLog } from "../../../../../../lib/observability";
 const handleGet = async (
   request: Request,
   { params }: { params: Promise<{ id: string; file: string; stream: string }> },
 ) => {
+  const blocked = await requireProviderAccess(request);
+  if (blocked) return blocked;
   try {
     const { id, file, stream } = await params;
     if (![id, file, stream].every((value) => /^\d+$/.test(value)))
@@ -16,6 +19,7 @@ const handleGet = async (
     const base = process.env.KHEYFLIX_TRANSCODER_URL || "http://127.0.0.1:3101",
       response = await fetch(`${base}/subtitle/${id}/${file}/${stream}.vtt?start=${start}`, {
         cache: "no-store",
+        signal: request.signal,
       });
     if (!response.ok || !response.body)
       return Response.json(

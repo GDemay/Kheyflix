@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -27,7 +29,6 @@ import ProfilePage from "./profile-page";
 import { DebridDetails, DebridExperience } from "./debrid-library";
 import DiscoveryPage from "./discovery-page";
 import { parseRoute, Route, routePath } from "./routing";
-import StreamingPlayer from "./streaming-player";
 import { normalizeSearchQuery } from "./catalog-ux";
 import {
   playbackExitRoute,
@@ -35,6 +36,11 @@ import {
 } from "./lib/player-navigation";
 import { useDialogFocus } from "./lib/use-dialog-focus";
 import { playKheyflixSting } from "./lib/brand-sting";
+
+// The player is only useful on a watch route. Keep initial browsing responsive
+// by loading it at the moment a viewer actually starts a stream.
+const loadStreamingPlayer = () => import("./streaming-player");
+const StreamingPlayer = lazy(loadStreamingPlayer);
 
 const subscribeToNothing = () => () => undefined;
 let startupStingRequested = false;
@@ -644,6 +650,10 @@ export default function KheyflixApp() {
   }, [route.section, route.title]);
   const navigate = useCallback(
     (next: Route, replace = false) => {
+      // Start the player module fetch from the user's deliberate Play action.
+      // This preserves the smaller browse bundle without adding a cold-route
+      // RTT to click-to-first-frame.
+      if (next.section === "stream") void loadStreamingPlayer();
       if (next.section === "title" || next.section === "watch")
         previousRoute.current = route;
       playerReturnRoute.current = playbackReturnRoute(
@@ -744,20 +754,30 @@ export default function KheyflixApp() {
     );
   if (route.section === "stream" && remoteItem)
     return (
-      <StreamingPlayer
-        key={`${route.id}-${route.file}`}
-        route={route}
-        navigate={navigate}
-        onBack={() =>
-          navigate(
-            playbackExitRoute(
-              window.history.state?.kheyflixReturn,
-              playerReturnRoute.current,
-            ),
-            true,
-          )
+      <Suspense
+        fallback={
+          <main className="player-shell" aria-label="Preparing Kheyflix player">
+            <div className="player-loading" role="status" aria-live="polite">
+              Preparing your player…
+            </div>
+          </main>
         }
-      />
+      >
+        <StreamingPlayer
+          key={`${route.id}-${route.file}`}
+          route={route}
+          navigate={navigate}
+          onBack={() =>
+            navigate(
+              playbackExitRoute(
+                window.history.state?.kheyflixReturn,
+                playerReturnRoute.current,
+              ),
+              true,
+            )
+          }
+        />
+      </Suspense>
     );
   const modalOpen =
     route.section === "debrid" || (route.section === "title" && Boolean(item));

@@ -18,7 +18,7 @@ test("a compatibility-only catalog episode decodes and advances", async ({
   await page.goto(compatibilityPath, { waitUntil: "domcontentloaded" });
 
   const video = page.locator("video");
-  await expect(video).toBeVisible();
+  await expect(video).toBeVisible({ timeout: 30_000 });
   await expect
     .poll(() => video.evaluate((element) => element.readyState), {
       timeout: 70_000,

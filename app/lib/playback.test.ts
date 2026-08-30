@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  BOOTSTRAP_PROMOTION_DELAY_MS,
   availableQualities,
   bestAutoQuality,
+  autoQualityUpgradeTarget,
+  bootstrapStartOffset,
+  canStartPlaybackSource,
   needsCompatibleAudio,
   needsCompatiblePlayback,
   nextAutoQuality,
   playbackSurfaceState,
   releaseTranscoderSession,
   requiresMutedAutoplay,
+  shouldSurfaceMediaInfoError,
+  supportsNativeAppleHls,
   usesBootstrapStream,
 } from "./playback";
 
@@ -26,6 +32,50 @@ describe("playback compatibility", () => {
     expect(usesBootstrapStream(true, true)).toBe(false);
     expect(usesBootstrapStream(false, true)).toBe(true);
     expect(usesBootstrapStream(false, false)).toBe(false);
+  });
+
+  it("recognizes native Apple HLS independently of iPhone autoplay rules", () => {
+    expect(supportsNativeAppleHls("Apple Computer, Inc.", "maybe")).toBe(true);
+    expect(supportsNativeAppleHls("Google Inc.", "probably")).toBe(false);
+  });
+
+  it("lets native Apple HLS start a fixed profile while metadata is still probing", () => {
+    expect(
+      canStartPlaybackSource({
+        effectiveBootstrap: false,
+        fixedProfilePlayback: false,
+        nativeHlsPlayback: true,
+        mediaReady: false,
+        transcoded: true,
+      }),
+    ).toBe(true);
+    expect(shouldSurfaceMediaInfoError(false, true)).toBe(false);
+    expect(shouldSurfaceMediaInfoError(false, true, 502)).toBe(false);
+    expect(shouldSurfaceMediaInfoError(true, false, 502)).toBe(true);
+  });
+
+  it("starts a known fixed transcoded profile without waiting for metadata", () => {
+    expect(
+      canStartPlaybackSource({
+        effectiveBootstrap: false,
+        fixedProfilePlayback: true,
+        nativeHlsPlayback: false,
+        mediaReady: false,
+        transcoded: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps direct browser playback gated on metadata and surfaces its probe failure", () => {
+    expect(
+      canStartPlaybackSource({
+        effectiveBootstrap: false,
+        nativeHlsPlayback: false,
+        mediaReady: false,
+        transcoded: false,
+      }),
+    ).toBe(false);
+    expect(shouldSurfaceMediaInfoError(false, false)).toBe(true);
   });
 
   it("does not force compatibility before metadata is available", () => {
@@ -76,6 +126,77 @@ describe("playback compatibility", () => {
     expect(bestAutoQuality(0)).toBe("480");
   });
 
+  it("keeps resumed bootstrap playback at the exact saved position", () => {
+    expect(bootstrapStartOffset(59)).toBe(59);
+    expect(bootstrapStartOffset(0)).toBe(0);
+  });
+
+  it("promotes startup quality promptly after stable playback without a competing prewarm", () => {
+    expect(BOOTSTRAP_PROMOTION_DELAY_MS).toBeGreaterThanOrEqual(5_000);
+    expect(BOOTSTRAP_PROMOTION_DELAY_MS).toBeLessThanOrEqual(8_000);
+    expect(
+      autoQualityUpgradeTarget({
+        bootstrap: true,
+        nativeHlsPlayback: false,
+        loading: false,
+        playing: true,
+        qualityMode: "auto",
+        rendition: "480",
+        sourceHeight: 2160,
+        transcoded: true,
+      }),
+    ).toBe("original");
+    expect(
+      autoQualityUpgradeTarget({
+        bootstrap: false,
+        nativeHlsPlayback: false,
+        sustainedCompatibility: true,
+        loading: false,
+        playing: true,
+        qualityMode: "auto",
+        rendition: "480",
+        sourceHeight: 2160,
+        transcoded: true,
+      }),
+    ).toBeNull();
+    expect(
+      autoQualityUpgradeTarget({
+        bootstrap: true,
+        nativeHlsPlayback: false,
+        loading: false,
+        playing: true,
+        qualityMode: "auto",
+        rendition: "480",
+        sourceHeight: 0,
+        transcoded: true,
+      }),
+    ).toBe("480");
+    expect(
+      autoQualityUpgradeTarget({
+        bootstrap: true,
+        nativeHlsPlayback: true,
+        loading: false,
+        playing: true,
+        qualityMode: "auto",
+        rendition: "480",
+        sourceHeight: 2160,
+        transcoded: true,
+      }),
+    ).toBeNull();
+    expect(
+      autoQualityUpgradeTarget({
+        bootstrap: false,
+        nativeHlsPlayback: false,
+        loading: true,
+        playing: true,
+        qualityMode: "auto",
+        rendition: "480",
+        sourceHeight: 720,
+        transcoded: true,
+      }),
+    ).toBe("original");
+  });
+
   it("releases a quality prewarm session before the upgraded stream starts", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
 
@@ -83,7 +204,7 @@ describe("playback compatibility", () => {
 
     expect(fetcher).toHaveBeenCalledWith(
       "/api/debrid/transcode/72935164/0?session=prewarm-123",
-      { method: "POST", keepalive: true },
+      { method: "POST", keepalive: true, signal: undefined },
     );
   });
 
@@ -166,6 +287,67 @@ describe("playback compatibility", () => {
         showError: false,
         showInitialLoader: false,
         showIosPrompt: true,
+      },
+    },
+    {
+      name: "iOS initial loading keeps a tap-to-start affordance",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: true,
+        loading: true,
+        pausedByUser: false,
+        playing: false,
+        startedPlayback: false,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: true,
+        showIosPrompt: true,
+      },
+    },
+    {
+      name: "iOS keeps its activation affordance until the first decoded frame",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: true,
+        loading: true,
+        pausedByUser: false,
+        playing: true,
+        startedPlayback: false,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: false,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: true,
+        showIosPrompt: true,
+      },
+    },
+    {
+      name: "iOS reveals the native video after its activation tap",
+      input: {
+        controls: true,
+        error: false,
+        iosPlayback: true,
+        iosSourceActivated: true,
+        loading: true,
+        pausedByUser: false,
+        playing: true,
+        startedPlayback: false,
+      },
+      expected: {
+        dimVideo: false,
+        showBuffering: true,
+        showCentralControls: false,
+        showError: false,
+        showInitialLoader: false,
+        showIosPrompt: false,
       },
     },
     {

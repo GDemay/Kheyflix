@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   audioSyncOptions,
+  fixedProfileHeight,
   selectedStreamIndex,
   subtitleTimelineOptions,
   videoOutputOptions,
 } from "../../scripts/transcoder-options.mjs";
 
 describe("compatible playback transcoder options", () => {
+  it("uses the real fixed-profile height when startup bypasses ffprobe", () => {
+    expect(fixedProfileHeight("bootstrap")).toBe(360);
+    expect(fixedProfileHeight("480")).toBe(480);
+  });
+
   it("copies browser-safe H.264 without spending CPU on a re-encode", () => {
     expect(videoOutputOptions("h264")).toEqual(["-c:v", "copy"]);
   });
@@ -50,7 +56,7 @@ describe("compatible playback transcoder options", () => {
   });
 
   it.each([
-    ["bootstrap", "scale=-2:240", "280k"],
+    ["bootstrap", "scale=-2:360", "560k"],
     ["480", "scale=-2:480", "900k"],
     ["720", "scale=-2:720", "2200k"],
     ["1080", "scale=-2:1080", "4500k"],

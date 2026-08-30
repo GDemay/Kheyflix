@@ -176,12 +176,30 @@ test("a progress refresh failure becomes retryable and carries its request refer
       }],
     },
   }));
+  let uploads = 0;
+  let refreshes = 0;
   await page.route("**/api/debrid/magnets**", async (route) => {
     if (route.request().method() === "POST") {
+      uploads += 1;
       await route.fulfill({
         status: 201,
         headers: { "x-request-id": "upload-ref" },
         json: { magnet: { id: 42, ready: false } },
+      });
+      return;
+    }
+    refreshes += 1;
+    if (refreshes > 1) {
+      await route.fulfill({
+        json: {
+          magnets: [{
+            id: 42,
+            filename: "Pokemon Detective Pikachu",
+            statusCode: 4,
+            status: "Ready",
+            videoFiles: [{ index: 0, name: "Pokemon.Detective.Pikachu.2019.mkv", size: 2_000_000_000, path: "" }],
+          }],
+        },
       });
       return;
     }
@@ -198,8 +216,9 @@ test("a progress refresh failure becomes retryable and carries its request refer
   await page.getByText("I confirm I’m authorized").click();
   await page.getByRole("button", { name: "Prepare", exact: true }).click();
 
-  await expect(page.getByText(/Media preparation is temporarily unavailable.*refresh-ref/)).toBeVisible({ timeout: 5_000 });
-  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+  await expect(page.getByText(/Media preparation is temporarily unavailable.*refresh-ref.*Retrying the existing preparation/i)).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText("Ready to watch")).toBeVisible({ timeout: 8_000 });
+  expect(uploads).toBe(1);
   expect(browserErrors.some((message) => message.includes("refresh-ref"))).toBe(true);
 });
 

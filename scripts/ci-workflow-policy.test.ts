@@ -9,4 +9,24 @@ describe("CI workflow concurrency", () => {
       /concurrency:\s*\n\s+group:\s*\$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}\s*\n\s+cancel-in-progress:\s*true/,
     );
   });
+
+  it("grants OIDC only to the post-deploy production verifier", () => {
+    expect(workflow).toMatch(
+      /production-playback:[\s\S]*?permissions:\s*\n\s+contents:\s*read\s*\n\s+id-token:\s*write/,
+    );
+    expect(workflow).toMatch(/permissions:\s*\n\s+contents:\s*read\s*\n(?!\s+id-token)/);
+  });
+
+  it("runs deterministic UI smoke coverage before allowing a change to merge", () => {
+    expect(workflow).toMatch(
+      /validate:[\s\S]*?name: Install Chromium for UI smoke tests[\s\S]*?npx playwright install --with-deps chromium[\s\S]*?name: UI smoke tests[\s\S]*?npm run test:ui:smoke/,
+    );
+  });
+
+  it("keeps provider-failure and player-preference regressions in the PR smoke gate", () => {
+    const packageJson = readFileSync("package.json", "utf8");
+
+    expect(packageJson).toContain("tests/ui/provider-failure.spec.ts");
+    expect(packageJson).toContain("tests/ui/player-preferences.spec.ts");
+  });
 });

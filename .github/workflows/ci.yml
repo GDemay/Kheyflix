@@ -16,7 +16,7 @@ jobs:
   validate:
     name: Lint, test, and build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -33,6 +33,10 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Install Chromium for UI smoke tests
+        run: npx playwright install --with-deps chromium
+      - name: UI smoke tests
+        run: npm run test:ui:smoke
 
   production-playback:
     name: Verify Railway production
@@ -40,6 +44,9 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,6 +66,8 @@ jobs:
           echo "Railway did not deploy $EXPECTED_COMMIT within 10 minutes" >&2
           exit 1
       - run: npm run verify:production
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:playback:production
       - name: Upload playback diagnostics

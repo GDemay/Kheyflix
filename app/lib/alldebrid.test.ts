@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AllDebridError, contentTypeFor, listMagnets, resolveVideo, uploadMagnet } from './alldebrid';
 
-afterEach(()=>{delete process.env.ALLDEBRID_API_KEY;vi.unstubAllGlobals()});
+afterEach(()=>{delete process.env.ALLDEBRID_API_KEY;vi.restoreAllMocks();vi.unstubAllGlobals()});
 
 describe('AllDebrid server integration',()=>{
   it('never runs without a server-side key',async()=>{
@@ -46,6 +46,26 @@ describe('AllDebrid server integration',()=>{
     expect(fetchMock.mock.calls[1][0]).toContain('/v4/link/unlock');
   });
 
+  it('records provider response timing without provider links or credentials',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    const output=vi.spyOn(console,'info').mockImplementation(()=>undefined);
+    const fetchMock=vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{magnets:[{id:77,files:[{n:'Movie.mp4',s:4096,l:'https://files.test/private-link'}]}]}}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/private-link',filename:'Movie.mp4',filesize:4096}}),{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+
+    await resolveVideo(77,0);
+
+    const events=output.mock.calls.map(([entry])=>JSON.parse(String(entry)));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({event:'alldebrid.request.completed',operation:'magnet.files',status:200,durationMs:expect.any(Number)}),
+      expect.objectContaining({event:'alldebrid.request.completed',operation:'link.unlock',status:200,durationMs:expect.any(Number)}),
+    ]));
+    const serialized=JSON.stringify(events);
+    expect(serialized).not.toContain('test-only-key');
+    expect(serialized).not.toContain('private-link');
+  });
+
   it('can refresh an expired unlocked stream URL',async()=>{
     process.env.ALLDEBRID_API_KEY='test-only-key';
     const files={status:'success',data:{magnets:[{id:43,files:[{n:'Pilot.mkv',s:4096,l:'https://files.test/pilot'}]}]}};
@@ -58,5 +78,68 @@ describe('AllDebrid server integration',()=>{
     await expect(resolveVideo(43,0)).resolves.toMatchObject({url:'https://cdn.test/old.mkv'});
     await expect(resolveVideo(43,0,undefined,true)).resolves.toMatchObject({url:'https://cdn.test/fresh.mkv'});
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('shares one deadline across file lookup and unlock without starting a late unlock',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    let now=1_000;
+    vi.spyOn(Date,'now').mockImplementation(()=>now);
+    const fetchMock=vi.fn().mockImplementationOnce(async()=>{
+      now+=20_000;
+      return new Response(JSON.stringify({status:'success',data:{magnets:[{id:910003,files:[{n:'Late.Movie.mp4',s:4096,l:'https://files.test/late'}]}]}}),{status:200});
+    });
+    vi.stubGlobal('fetch',fetchMock);
+
+    await expect(resolveVideo(910003,0)).rejects.toMatchObject({code:'STREAM_RESOLUTION_TIMEOUT',status:504});
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/v4/magnet/files');
+  });
+
+  it('gives unlock only the resolver time remaining after file lookup',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    let now=1_000;
+    vi.spyOn(Date,'now').mockImplementation(()=>now);
+    const timeout=vi.spyOn(AbortSignal,'timeout');
+    const fetchMock=vi.fn()
+      .mockImplementationOnce(async()=>{
+        now+=15_000;
+        return new Response(JSON.stringify({status:'success',data:{magnets:[{id:910004,files:[{n:'Budget.Movie.mp4',s:4096,l:'https://files.test/budget'}]}]}}),{status:200});
+      })
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/budget.mp4'}}),{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+
+    await expect(resolveVideo(910004,0)).resolves.toMatchObject({url:'https://cdn.test/budget.mp4'});
+
+    expect(timeout).toHaveBeenNthCalledWith(1,7_500);
+    expect(timeout).toHaveBeenNthCalledWith(2,5_000);
+  });
+
+  it('retries a transient provider failure within the request budget',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    const fetchMock=vi.fn()
+      .mockRejectedValueOnce(new Error('temporary network interruption'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{magnets:[{id:910001,files:[{n:'Retry.Movie.mp4',s:4096,l:'https://files.test/retry'}]}]}}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/retry.mp4',filename:'Retry.Movie.mp4',filesize:4096}}),{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+
+    await expect(resolveVideo(910001,0)).resolves.toMatchObject({url:'https://cdn.test/retry.mp4'});
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('coalesces concurrent forced stream refreshes into one provider resolution',async()=>{
+    process.env.ALLDEBRID_API_KEY='test-only-key';
+    const fetchMock=vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{magnets:[{id:910002,files:[{n:'Shared.Movie.mp4',s:4096,l:'https://files.test/shared'}]}]}}),{status:200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({status:'success',data:{link:'https://cdn.test/shared.mp4',filename:'Shared.Movie.mp4',filesize:4096}}),{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+
+    const [first,second]=await Promise.all([
+      resolveVideo(910002,0,undefined,true),
+      resolveVideo(910002,0,undefined,true),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

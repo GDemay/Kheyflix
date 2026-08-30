@@ -1,6 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
+export const productionAccessStatePath = join(
+  tmpdir(),
+  "kheyflix-playwright-production-access.json",
+);
 
 export default defineConfig({
   testDir: "./tests/ui",
@@ -17,13 +23,16 @@ export default defineConfig({
     },
   },
   use: {
-    baseURL: externalBaseUrl ?? "http://127.0.0.1:4173",
+    baseURL: externalBaseUrl ?? "http://localhost:4173",
     colorScheme: "dark",
     locale: "en-US",
     reducedMotion: "reduce",
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    storageState: externalBaseUrl ? productionAccessStatePath : undefined,
+    trace: externalBaseUrl ? "off" : "retain-on-failure",
   },
+  globalSetup: externalBaseUrl ? "./tests/ui/production-access.setup.ts" : undefined,
+  globalTeardown: externalBaseUrl ? "./tests/ui/production-access.teardown.ts" : undefined,
   projects: [
     { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" } },
     { name: "tablet", use: { ...devices["iPad (gen 7)"], browserName: "chromium" } },
@@ -32,8 +41,8 @@ export default defineConfig({
   webServer: externalBaseUrl
     ? undefined
     : {
-        command: "./node_modules/.bin/vinext dev --port 4173",
-        url: "http://127.0.0.1:4173",
+        command: "PORT=4173 node scripts/run-dev.mjs",
+        url: "http://localhost:4173",
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
       },

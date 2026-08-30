@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMPATIBLE_STARTUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
+  shouldArmStartupRecoveryTimer,
   startupRecovery,
 } from "./playback-recovery";
 
@@ -20,5 +21,36 @@ describe("playback startup recovery", () => {
       COMPATIBLE_STARTUP_TIMEOUT_MS,
     );
     expect(COMPATIBLE_STARTUP_TIMEOUT_MS).toBeLessThanOrEqual(35_000);
+  });
+
+  it("starts the Apple HLS watchdog while the media probe is still pending", () => {
+    expect(
+      shouldArmStartupRecoveryTimer({
+        effectiveBootstrap: false,
+        error: false,
+        loading: true,
+        mediaReady: false,
+        nativeHlsPlayback: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldArmStartupRecoveryTimer({
+        effectiveBootstrap: false,
+        error: false,
+        loading: true,
+        mediaReady: false,
+        nativeHlsPlayback: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldArmStartupRecoveryTimer({
+        effectiveBootstrap: false,
+        error: false,
+        loading: true,
+        mediaReady: true,
+        nativeHlsPlayback: true,
+        startupSettled: true,
+      }),
+    ).toBe(false);
   });
 });

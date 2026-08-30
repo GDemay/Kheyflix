@@ -32,7 +32,7 @@ type Result = {
 };
 type Preparation = {
   magnetId: number;
-  phase: "adding" | "preparing" | "ready" | "failed";
+  phase: "adding" | "preparing" | "retrying" | "ready" | "failed";
   progress: number;
   status: string;
   record?: DebridMagnetRecord;
@@ -166,7 +166,12 @@ export default function DiscoveryPage({
   const activeIds = useMemo(
     () =>
       Object.values(preparations)
-        .filter((item) => item.phase === "adding" || item.phase === "preparing")
+        .filter(
+          (item) =>
+            item.phase === "adding" ||
+            item.phase === "preparing" ||
+            item.phase === "retrying",
+        )
         .map((item) => item.magnetId)
         .filter(Boolean),
     [preparations],
@@ -301,7 +306,14 @@ export default function DiscoveryPage({
         setPreparations((current) => Object.fromEntries(
           Object.entries(current).map(([resultId, preparation]) =>
             activeIds.includes(preparation.magnetId)
-              ? [resultId, { ...preparation, phase: "failed", progress: 0, status: failure.message }]
+              ? [
+                  resultId,
+                  {
+                    ...preparation,
+                    phase: "retrying",
+                    status: `${failure.message} Retrying the existing preparation…`,
+                  },
+                ]
               : [resultId, preparation],
           ),
         ));
@@ -356,7 +368,14 @@ export default function DiscoveryPage({
       setPreparations((current) => Object.fromEntries(
         Object.entries(current).map(([resultId, preparation]) =>
           activeIds.includes(preparation.magnetId)
-            ? [resultId, { ...preparation, phase: "failed", progress: 0, status: failure.message }]
+            ? [
+                resultId,
+                {
+                  ...preparation,
+                  phase: "retrying",
+                  status: `${failure.message} Retrying the existing preparation…`,
+                },
+              ]
             : [resultId, preparation],
         ),
       ));
@@ -509,7 +528,10 @@ export default function DiscoveryPage({
                   )}
                 </div>
               ) : (
-                <span className="preparing-label"><LoaderCircle className="spin" /> Preparing</span>
+                <span className="preparing-label">
+                  <LoaderCircle className="spin" />
+                  {preparation?.phase === "retrying" ? "Retrying status" : "Preparing"}
+                </span>
               )}
               {ready && <Check className="ready-check" aria-hidden="true" />}
             </article>

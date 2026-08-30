@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 
-import { resolveDevEnvironment } from "./run-dev-support.mjs";
+import { loadLocalEnvironment, resolveDevEnvironment } from "./run-dev-support.mjs";
 
-const { env, startApp, startTranscoder } = await resolveDevEnvironment();
+const { env, startApp, startTranscoder } = await resolveDevEnvironment(
+  await loadLocalEnvironment(),
+);
 const children = [];
 
 if (!startApp) {
@@ -26,7 +28,10 @@ if (startTranscoder) {
 }
 
 children.push(
-  spawn("node_modules/.bin/vinext", ["dev"], { stdio: "inherit", env }),
+  spawn("node_modules/.bin/vinext", ["dev", "--port", env.PORT], {
+    stdio: "inherit",
+    env,
+  }),
 );
 
 let stopping = false;
