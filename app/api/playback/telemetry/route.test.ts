@@ -18,6 +18,7 @@ describe("playback telemetry", () => {
         body: JSON.stringify({
           event: "first_frame",
           elapsedMs: 842,
+          sourceElapsedMs: 611,
           rebufferCount: 0,
           attempt: 2,
           phase: "bootstrap",
@@ -33,6 +34,7 @@ describe("playback telemetry", () => {
       event: "playback.telemetry.received",
       playbackEvent: "first_frame",
       elapsedMs: 842,
+      sourceElapsedMs: 611,
       rebufferCount: 0,
       attempt: 2,
       phase: "bootstrap",
@@ -63,6 +65,31 @@ describe("playback telemetry", () => {
       playbackEvent: "native_vod_handoff",
       elapsedMs: 35,
       rebufferCount: 0,
+    });
+  });
+
+  it("records a bootstrap EOF before a decoded frame as startup recovery", async () => {
+    const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const response = await POST(
+      new Request("https://kheyflix.test/api/playback/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "bootstrap_eof_before_frame",
+          elapsedMs: 2_400,
+          rebufferCount: 0,
+          attempt: 1,
+          phase: "bootstrap",
+          quality: "bootstrap",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(JSON.parse(String(output.mock.calls[0][0]))).toMatchObject({
+      playbackEvent: "bootstrap_eof_before_frame",
+      elapsedMs: 2_400,
+      attempt: 1,
     });
   });
 

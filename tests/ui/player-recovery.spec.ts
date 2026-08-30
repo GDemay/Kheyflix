@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { BOOTSTRAP_PROMOTION_DELAY_MS } from "../../app/lib/playback";
 import { NATIVE_STARTUP_TIMEOUT_MS } from "../../app/lib/playback-recovery";
 
 type Deferred = {
@@ -17,6 +18,7 @@ const deferred = (): Deferred => {
 type DelayedHandoff = {
   waitForRelease: Promise<void>;
   allowRelease: () => void;
+  releaseStarted: () => boolean;
   freshSourceStartedEarly: () => boolean;
 };
 
@@ -29,6 +31,7 @@ const configureDelayedTranscoder = async (page: Page) => {
         allowRelease: Deferred;
         oldSession: string;
         releaseObserved: Deferred;
+        releaseStarted: boolean;
         released: boolean;
         freshSourceStartedEarly: boolean;
       }
@@ -52,6 +55,7 @@ const configureDelayedTranscoder = async (page: Page) => {
       url.searchParams.get("session") === active.oldSession &&
       !active.released
     ) {
+      active.releaseStarted = true;
       active.releaseObserved.resolve();
       await active.allowRelease.promise;
       active.released = true;
@@ -66,12 +70,14 @@ const configureDelayedTranscoder = async (page: Page) => {
         allowRelease,
         oldSession,
         releaseObserved,
+        releaseStarted: false,
         released: false,
         freshSourceStartedEarly: false,
       };
       return {
         waitForRelease: releaseObserved.promise,
         allowRelease: allowRelease.resolve,
+        releaseStarted: () => active?.releaseStarted ?? false,
         freshSourceStartedEarly: () => active?.freshSourceStartedEarly ?? false,
       };
     },
@@ -118,6 +124,47 @@ const isolateSyntheticMediaError = (page: Page) =>
       true,
     );
   });
+
+const installQueuedVideoFrameCallbacks = (page: Page) =>
+  page.addInitScript(() => {
+    const target = window as Window & {
+      __kheyflixFrameCallbacks?: VideoFrameRequestCallback[];
+    };
+    const callbacks: VideoFrameRequestCallback[] = [];
+    target.__kheyflixFrameCallbacks = callbacks;
+    Object.defineProperty(HTMLVideoElement.prototype, "requestVideoFrameCallback", {
+      configurable: true,
+      value(callback: VideoFrameRequestCallback) {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "cancelVideoFrameCallback", {
+      configurable: true,
+      value() {},
+    });
+  });
+
+const queuedVideoFrameCallbacks = (page: Page) =>
+  page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __kheyflixFrameCallbacks?: VideoFrameRequestCallback[];
+        }
+      ).__kheyflixFrameCallbacks?.length ?? 0,
+  );
+
+const invokeQueuedVideoFrameCallback = (page: Page, index: number) =>
+  page.evaluate((callbackIndex) => {
+    const callback = (
+      window as Window & {
+        __kheyflixFrameCallbacks?: VideoFrameRequestCallback[];
+      }
+    ).__kheyflixFrameCallbacks?.[callbackIndex];
+    if (!callback) throw new Error(`Missing queued video frame callback ${callbackIndex}.`);
+    callback(performance.now(), {} as VideoFrameCallbackMetadata);
+  }, index);
 
 test("a failed bootstrap switches to a non-bootstrap recovery source", async ({ page }) => {
   test.setTimeout(30_000);
@@ -1113,10 +1160,12 @@ test("seek, audio, and quality changes wait for the active transcoder session to
   });
 });
 
-test("automatic desktop quality promotion waits for the bootstrap session to release", async ({
+test("automatic desktop quality promotion waits for a decoded bootstrap frame and its release", async ({
   page,
 }) => {
   test.setTimeout(30_000);
+  await page.clock.install();
+  await installQueuedVideoFrameCallbacks(page);
   await isolateSyntheticMediaError(page);
   await page.route("**/api/debrid/media/42/0", async (route) =>
     route.fulfill({
@@ -1129,6 +1178,13 @@ test("automatic desktop quality promotion waits for the bootstrap session to rel
   );
   const handoffs = await configureDelayedTranscoder(page);
   await page.route("**/api/debrid/stream/42/0", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  const playbackTelemetry: Array<Record<string, unknown>> = [];
+  await page.route("**/api/playback/telemetry", async (route) => {
+    playbackTelemetry.push(
+      JSON.parse(route.request().postData() || "{}") as Record<string, unknown>,
+    );
     await route.fulfill({ status: 204 });
   });
   await page.goto("/stream/42/0/automatic-release-order", {
@@ -1152,6 +1208,17 @@ test("automatic desktop quality promotion waits for the bootstrap session to rel
     element.dispatchEvent(new Event("playing", { bubbles: true })),
   );
 
+  await expect.poll(() => queuedVideoFrameCallbacks(page)).toBe(1);
+  await page.clock.fastForward(BOOTSTRAP_PROMOTION_DELAY_MS);
+  expect(handoff.releaseStarted()).toBe(false);
+
+  await invokeQueuedVideoFrameCallback(page, 0);
+  await expect
+    .poll(() =>
+      playbackTelemetry.find((telemetry) => telemetry.event === "first_frame"),
+    )
+    .toMatchObject({ attempt: 1, phase: "bootstrap", quality: "bootstrap" });
+
   await handoff.waitForRelease;
   await page.waitForTimeout(150);
   expect(handoff.freshSourceStartedEarly()).toBe(false);
@@ -1161,6 +1228,246 @@ test("automatic desktop quality promotion waits for the bootstrap session to rel
     "data-playback-quality",
     "original",
   );
+});
+
+test("a bootstrap EOF before its first decoded frame is observable and retains viewer startup timing", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  await page.clock.install();
+  await installQueuedVideoFrameCallbacks(page);
+  await isolateSyntheticMediaError(page);
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...replacementMedia,
+        format: "mov,mp4,m4a,3gp,3g2,mj2",
+      }),
+    }),
+  );
+  const handoffs = await configureDelayedTranscoder(page);
+  await page.route("**/api/debrid/stream/42/0", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  const playbackTelemetry: Array<Record<string, unknown>> = [];
+  await page.route("**/api/playback/telemetry", async (route) => {
+    playbackTelemetry.push(
+      JSON.parse(route.request().postData() || "{}") as Record<string, unknown>,
+    );
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/bootstrap-eof-before-frame", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/transcode\/42\/0/);
+  const before = await video.getAttribute("src");
+  expect(before).toBeTruthy();
+  const oldSession = sourceSession(before!);
+  expect(oldSession).toBeTruthy();
+  const handoff = handoffs.arm(oldSession!);
+  const replacementRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return request.method() === "GET" && url.pathname === "/api/debrid/stream/42/0";
+  });
+
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing", { bubbles: true })),
+  );
+  await expect.poll(() => queuedVideoFrameCallbacks(page)).toBe(1);
+  await page.clock.fastForward(2_000);
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("ended", { bubbles: true })),
+  );
+
+  await handoff.waitForRelease;
+  expect(handoff.freshSourceStartedEarly()).toBe(false);
+  handoff.allowRelease();
+  await replacementRequest;
+  await expect(page.locator("main.player-shell")).toHaveAttribute(
+    "data-playback-quality",
+    "original",
+  );
+  await expect
+    .poll(() =>
+      playbackTelemetry.find(
+        (telemetry) => telemetry.event === "bootstrap_eof_before_frame",
+      ),
+    )
+    .toMatchObject({ attempt: 1, phase: "bootstrap", quality: "bootstrap" });
+
+  // The callback queued by the failed bootstrap must not be attributed to the
+  // replacement source. It never produces a first-frame metric.
+  await invokeQueuedVideoFrameCallback(page, 0);
+  await page.waitForTimeout(50);
+  expect(
+    playbackTelemetry.some((telemetry) => telemetry.event === "first_frame"),
+  ).toBe(false);
+
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing", { bubbles: true })),
+  );
+  await expect.poll(() => queuedVideoFrameCallbacks(page)).toBe(2);
+  await invokeQueuedVideoFrameCallback(page, 1);
+  await expect
+    .poll(() =>
+      playbackTelemetry.find((telemetry) => telemetry.event === "first_frame"),
+    )
+    .toMatchObject({ attempt: 2, phase: "standard", quality: "original" });
+  const firstFrame = playbackTelemetry.find(
+    (telemetry) => telemetry.event === "first_frame",
+  )!;
+  expect(Number(firstFrame.elapsedMs)).toBeGreaterThanOrEqual(2_000);
+  expect(Number(firstFrame.sourceElapsedMs)).toBeLessThan(
+    Number(firstFrame.elapsedMs),
+  );
+  expect(
+    Number(await page.locator("main.player-shell").getAttribute("data-first-frame-ms")),
+  ).toBeGreaterThanOrEqual(2_000);
+  expect(
+    playbackTelemetry.filter((telemetry) => telemetry.event === "first_frame"),
+  ).toHaveLength(1);
+});
+
+test("first-frame telemetry includes media resolution before a direct source starts", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  await page.clock.install();
+  await installQueuedVideoFrameCallbacks(page);
+  await isolateSyntheticMediaError(page);
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "kheyflix:playback-preferences:v1:stream-42",
+      JSON.stringify({
+        audioLanguage: "eng",
+        subtitleSize: "medium",
+        qualityMode: "original",
+        playbackRate: 1,
+        audioSync: 0,
+      }),
+    );
+  });
+  const releaseMetadata = deferred();
+  await page.route("**/api/debrid/media/42/0", async (route) => {
+    await releaseMetadata.promise;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...replacementMedia,
+        format: "mov,mp4,m4a,3gp,3g2,mj2",
+      }),
+    });
+  });
+  await page.route("**/api/debrid/stream/42/0", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  const playbackTelemetry: Array<Record<string, unknown>> = [];
+  await page.route("**/api/playback/telemetry", async (route) => {
+    playbackTelemetry.push(
+      JSON.parse(route.request().postData() || "{}") as Record<string, unknown>,
+    );
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/delayed-direct-start", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await expect(video).not.toHaveAttribute("src", /\/api\/debrid\//);
+  await page.clock.fastForward(3_000);
+  releaseMetadata.resolve();
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/stream\/42\/0/);
+
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing", { bubbles: true })),
+  );
+  await expect.poll(() => queuedVideoFrameCallbacks(page)).toBe(1);
+  await invokeQueuedVideoFrameCallback(page, 0);
+  await expect
+    .poll(() =>
+      playbackTelemetry.find((telemetry) => telemetry.event === "first_frame"),
+    )
+    .toMatchObject({ attempt: 1, phase: "standard", quality: "original" });
+  const firstFrame = playbackTelemetry.find(
+    (telemetry) => telemetry.event === "first_frame",
+  )!;
+  expect(Number(firstFrame.elapsedMs)).toBeGreaterThanOrEqual(3_000);
+  expect(Number(firstFrame.sourceElapsedMs)).toBeLessThan(
+    Number(firstFrame.elapsedMs),
+  );
+  expect(
+    Number(await page.locator("main.player-shell").getAttribute("data-first-frame-ms")),
+  ).toBeGreaterThanOrEqual(3_000);
+});
+
+test("iPhone first-frame telemetry starts at the trusted play tap", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "phone", "controlled iPhone activation coverage");
+  test.setTimeout(30_000);
+  await page.clock.install();
+  await installQueuedVideoFrameCallbacks(page);
+  await isolateSyntheticMediaError(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "vendor", {
+      configurable: true,
+      value: "Apple Computer, Inc.",
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "canPlayType", {
+      configurable: true,
+      value: () => "maybe",
+    });
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+  });
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  await page.route("**/api/debrid/hls/42/0/**", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/debrid/transcode/42/0**", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  const playbackTelemetry: Array<Record<string, unknown>> = [];
+  await page.route("**/api/playback/telemetry", async (route) => {
+    playbackTelemetry.push(
+      JSON.parse(route.request().postData() || "{}") as Record<string, unknown>,
+    );
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/ios-viewer-start", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await expect(page.getByRole("button", { name: "Tap to play" })).toBeVisible();
+  await page.clock.fastForward(3_000);
+  await page.getByRole("button", { name: "Tap to play" }).click();
+  await expect
+    .poll(() => video.evaluate((element) => element.currentSrc))
+    .toContain("/api/debrid/hls/42/0/");
+  await page.clock.fastForward(2_000);
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("playing", { bubbles: true })),
+  );
+  await expect.poll(() => queuedVideoFrameCallbacks(page)).toBe(1);
+  await invokeQueuedVideoFrameCallback(page, 0);
+  await expect
+    .poll(() =>
+      playbackTelemetry.find((telemetry) => telemetry.event === "first_frame"),
+    )
+    .toMatchObject({ attempt: 1, phase: "standard", quality: "480" });
+  const firstFrame = playbackTelemetry.find(
+    (telemetry) => telemetry.event === "first_frame",
+  )!;
+  expect(Number(firstFrame.elapsedMs)).toBeGreaterThanOrEqual(2_000);
+  expect(Number(firstFrame.elapsedMs)).toBeLessThan(3_000);
 });
 
 test("an Apple HLS startup deadline stays absolute when metadata resolves", async ({

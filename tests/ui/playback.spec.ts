@@ -63,17 +63,21 @@ test("a real movie starts and keeps streaming", async ({ page }) => {
     (telemetry) => telemetry.event === "first_frame",
   )!;
   const firstFrameIndex = playbackTelemetry.indexOf(firstFrameTelemetry);
-  // The live title can decode its direct source before the test samples the
-  // short bootstrap state. Assert the actual decoded-frame telemetry instead
-  // of a transient DOM label: both startup paths are intentional, while a
-  // fallback or an undeclared quality transition is not.
+  // Auto promotion is only allowed after a decoded bootstrap frame. A clean
+  // startup therefore has one source attempt; recovery before that frame is
+  // deliberately surfaced below instead of being counted as fast playback.
   expect(firstFrameTelemetry).toMatchObject({ event: "first_frame", attempt: 1 });
   expect(Number(firstFrameTelemetry.elapsedMs)).toBeLessThan(10_000);
   expect(
     playbackTelemetry
       .slice(0, firstFrameIndex)
       .some((telemetry) =>
-        ["failure", "startup_retry", "startup_timeout"].includes(
+        [
+          "failure",
+          "startup_retry",
+          "startup_timeout",
+          "bootstrap_eof_before_frame",
+        ].includes(
           String(telemetry.event),
         ),
       ),

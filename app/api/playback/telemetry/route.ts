@@ -3,6 +3,7 @@ import { observeApi, writeRequestLog } from "../../../lib/observability";
 
 const events = new Set([
   "first_frame",
+  "bootstrap_eof_before_frame",
   "native_vod_handoff",
   "rebuffer",
   "startup_timeout",
@@ -46,6 +47,7 @@ const handlePost = async (request: Request) => {
 
   const event = body.event,
     elapsedMs = body.elapsedMs,
+    sourceElapsedMs = body.sourceElapsedMs,
     rebufferCount = body.rebufferCount ?? 0,
     attempt = body.attempt ?? 1,
     phase = body.phase,
@@ -54,6 +56,7 @@ const handlePost = async (request: Request) => {
     typeof event !== "string" ||
     !events.has(event) ||
     !validMeasurement(elapsedMs, 300_000) ||
+    (sourceElapsedMs !== undefined && !validMeasurement(sourceElapsedMs, 300_000)) ||
     !validMeasurement(rebufferCount, 100) ||
     !validAttempt(attempt) ||
     (phase !== undefined && (typeof phase !== "string" || !phases.has(phase))) ||
@@ -64,6 +67,9 @@ const handlePost = async (request: Request) => {
   writeRequestLog("info", "playback.telemetry.received", request, {
     playbackEvent: event,
     elapsedMs: Math.round(elapsedMs),
+    ...(typeof sourceElapsedMs === "number"
+      ? { sourceElapsedMs: Math.round(sourceElapsedMs) }
+      : {}),
     rebufferCount: Math.floor(rebufferCount),
     attempt,
     ...(typeof phase === "string" ? { phase } : {}),
