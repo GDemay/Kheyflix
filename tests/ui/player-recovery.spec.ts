@@ -398,6 +398,258 @@ test("a paused native HLS stream resumes from a fresh session at the saved posit
   expect(resumed.pathname.split("/")[6]).not.toBe(oldSession);
 });
 
+test("a paused iPhone quality handoff remains paused", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "laptop", "controlled iPhone handoff regression");
+  test.setTimeout(30_000);
+  await page.addInitScript(() => {
+    const target = window as Window & { __kheyflixPlayCalls?: number };
+    target.__kheyflixPlayCalls = 0;
+    Object.defineProperty(navigator, "vendor", {
+      configurable: true,
+      value: "Apple Computer, Inc.",
+    });
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "canPlayType", {
+      configurable: true,
+      value: () => "maybe",
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+      configurable: true,
+      get() {
+        return (this as HTMLMediaElement).dataset.mockPaused !== "false";
+      },
+    });
+    HTMLMediaElement.prototype.play = function () {
+      target.__kheyflixPlayCalls = (target.__kheyflixPlayCalls || 0) + 1;
+      this.dataset.mockPaused = "false";
+      this.dispatchEvent(new Event("play", { bubbles: true }));
+      this.dispatchEvent(new Event("playing", { bubbles: true }));
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = function () {
+      this.dataset.mockPaused = "true";
+      this.dispatchEvent(new Event("pause", { bubbles: true }));
+    };
+    window.addEventListener(
+      "error",
+      (event) => {
+        if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  await page.route("**/api/debrid/hls/42/0/**", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/debrid/transcode/42/0**", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/paused-iphone-quality?compat=1", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await page.getByRole("button", { name: "Tap to play" }).click();
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/hls\/42\/0\//);
+  const before = await video.getAttribute("src");
+  expect(before).toBeTruthy();
+  await expect.poll(() =>
+    page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(1);
+
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Playback paused" })).toBeVisible();
+  const nextSource = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname.startsWith("/api/debrid/hls/42/0/") &&
+      url.searchParams.get("quality") === "720"
+    );
+  });
+  await page.getByRole("button", { name: "Playback settings" }).click();
+  await page
+    .getByRole("dialog", { name: "Playback settings" })
+    .getByRole("button", { name: "720p HD" })
+    .click();
+  await nextSource;
+  await expect.poll(() => video.getAttribute("src")).not.toBe(before);
+  await page.waitForTimeout(150);
+  await expect.poll(() =>
+    page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(1);
+  await expect.poll(() => video.evaluate((element) => element.paused)).toBe(true);
+});
+
+test("an iPhone quality handoff resumes after the viewer taps Play during release", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["laptop", "webkit"].includes(testInfo.project.name),
+    "controlled iPhone release-gate regression",
+  );
+  test.setTimeout(30_000);
+  await page.addInitScript(() => {
+    const target = window as Window & { __kheyflixPlayCalls?: number };
+    target.__kheyflixPlayCalls = 0;
+    Object.defineProperty(navigator, "vendor", {
+      configurable: true,
+      value: "Apple Computer, Inc.",
+    });
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "canPlayType", {
+      configurable: true,
+      value: () => "maybe",
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+      configurable: true,
+      get() {
+        return (this as HTMLMediaElement).dataset.mockPaused !== "false";
+      },
+    });
+    HTMLMediaElement.prototype.play = function () {
+      target.__kheyflixPlayCalls = (target.__kheyflixPlayCalls || 0) + 1;
+      if (!Object.hasOwn(this, "currentTime")) {
+        Object.defineProperty(this, "currentTime", {
+          configurable: true,
+          get() {
+            return Number((this as HTMLMediaElement).dataset.mockCurrentTime || 0);
+          },
+          set(value: number) {
+            (this as HTMLMediaElement).dataset.mockCurrentTime = String(value);
+          },
+        });
+      }
+      this.currentTime += 1;
+      this.dataset.mockPaused = "false";
+      this.dispatchEvent(new Event("play", { bubbles: true }));
+      this.dispatchEvent(new Event("playing", { bubbles: true }));
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = function () {
+      this.dataset.mockPaused = "true";
+      this.dispatchEvent(new Event("pause", { bubbles: true }));
+    };
+    window.addEventListener(
+      "error",
+      (event) => {
+        if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  const handoffs = await configureDelayedTranscoder(page);
+  let releaseAllowed = false,
+    successorStartedEarly = false;
+  await page.route("**/api/debrid/hls/42/0/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("quality") === "720" && !releaseAllowed)
+      successorStartedEarly = true;
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/stream/42/0/resume-during-iphone-release?compat=1", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await page.getByRole("button", { name: "Tap to play" }).click();
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/hls\/42\/0\//);
+  const before = await video.getAttribute("src");
+  expect(before).toBeTruthy();
+  await expect.poll(() =>
+    page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(1);
+
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  const paused = page.getByRole("group", { name: "Playback paused" });
+  await expect(paused).toBeVisible();
+  const oldSession = new URL(before!, "http://localhost").pathname.split("/")[6];
+  const handoff = handoffs.arm(oldSession);
+  const successorSource = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname.startsWith("/api/debrid/hls/42/0/") &&
+      url.searchParams.get("quality") === "720"
+    );
+  });
+  await page.getByRole("button", { name: "Playback settings" }).click();
+  await page
+    .getByRole("dialog", { name: "Playback settings" })
+    .getByRole("button", { name: "720p HD" })
+    .click();
+  await handoff.waitForRelease;
+  await expect.poll(() => handoff.releaseStarted()).toBe(true);
+  const beforeResume = await video.evaluate((element) => element.currentTime);
+  // The release request intentionally holds the source gate open. Dispatch
+  // the trusted user action directly so Playwright's layout/actionability
+  // wait does not mask the state transition this regression is exercising.
+  await page
+    .locator(".player-controls")
+    .getByRole("button", { name: "Play", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await page.waitForTimeout(150);
+  expect(handoff.freshSourceStartedEarly()).toBe(false);
+  expect(successorStartedEarly).toBe(false);
+  await expect.poll(() =>
+    page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(1);
+
+  releaseAllowed = true;
+  handoff.allowRelease();
+  await successorSource;
+  await expect.poll(() => video.getAttribute("src")).not.toBe(before);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __kheyflixPlayCalls?: number })
+            .__kheyflixPlayCalls || 0,
+      ),
+    )
+    .toBe(2);
+  await expect.poll(() => video.evaluate((element) => element.paused)).toBe(false);
+  await expect
+    .poll(() => video.evaluate((element) => element.currentTime))
+    .toBeGreaterThan(beforeResume);
+});
+
 test("a finite native VOD chunk advances Safari at its exact absolute position", async ({
   page,
 }, testInfo) => {
@@ -1153,6 +1405,181 @@ test("a later player choice is coalesced while the active session releases", asy
     "data-playback-quality",
     "original",
   );
+});
+
+test("a quality handoff resumes a source that was already playing", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "laptop", "desktop source-handoff regression");
+  test.setTimeout(30_000);
+  await isolateSyntheticMediaError(page);
+  await page.addInitScript(() => {
+    const target = window as Window & {
+      __kheyflixPlayCalls?: number;
+      __kheyflixRejectNextPlay?: boolean;
+    };
+    target.__kheyflixPlayCalls = 0;
+    Object.defineProperty(HTMLMediaElement.prototype, "play", {
+      configurable: true,
+      value() {
+        target.__kheyflixPlayCalls = (target.__kheyflixPlayCalls || 0) + 1;
+        if (target.__kheyflixRejectNextPlay) {
+          target.__kheyflixRejectNextPlay = false;
+          return Promise.reject(new DOMException("Synthetic autoplay rejection", "NotAllowedError"));
+        }
+        return Promise.resolve();
+      },
+    });
+  });
+  await page.route("**/api/debrid/media/42/0", async (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(replacementMedia),
+    }),
+  );
+  const handoffs = await configureDelayedTranscoder(page);
+
+  await page.goto("/stream/42/0/quality-resume", {
+    waitUntil: "domcontentloaded",
+  });
+  const video = page.locator("video");
+  await expect(video).toHaveAttribute("src", /\/api\/debrid\/transcode\/42\/0/);
+  await video.evaluate((element) => {
+    Object.defineProperty(element, "paused", {
+      configurable: true,
+      get: () => false,
+    });
+    element.dispatchEvent(new Event("playing", { bubbles: true }));
+  });
+  const before = await video.getAttribute("src");
+  expect(before).toBeTruthy();
+  const oldSession = sourceSession(before!);
+  expect(oldSession).toBeTruthy();
+  const handoff = handoffs.arm(oldSession!);
+  const nextSource = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname === "/api/debrid/transcode/42/0" &&
+      url.searchParams.get("session") !== sourceSession(before!) &&
+      url.searchParams.get("quality") === "720"
+    );
+  });
+
+  await page
+    .getByRole("button", { name: "Playback settings" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await page
+    .getByRole("dialog", { name: "Playback settings" })
+    .getByRole("button", { name: "720p HD" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await handoff.waitForRelease;
+  await page.waitForTimeout(150);
+  expect(handoff.freshSourceStartedEarly()).toBe(false);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(0);
+  handoff.allowRelease();
+  await nextSource;
+  await expect.poll(() => video.getAttribute("src")).not.toBe(before);
+  const playCallsBeforeReady = await page.evaluate(
+    () =>
+      (window as Window & { __kheyflixPlayCalls?: number })
+        .__kheyflixPlayCalls || 0,
+  );
+  await video.evaluate((element) => {
+    Object.defineProperty(element, "paused", {
+      configurable: true,
+      get: () => true,
+    });
+    element.dispatchEvent(new Event("canplay", { bubbles: true }));
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __kheyflixPlayCalls?: number })
+            .__kheyflixPlayCalls || 0,
+      ),
+    )
+    .toBeGreaterThan(playCallsBeforeReady);
+
+  // A rejected resume is a deliberate paused state, not an invitation to
+  // retry autoplay every time the media element emits another ready event.
+  await video.evaluate((element) => {
+    Object.defineProperty(element, "paused", {
+      configurable: true,
+      get: () => false,
+    });
+    element.dispatchEvent(new Event("playing", { bubbles: true }));
+  });
+  const secondBefore = await video.getAttribute("src");
+  expect(secondBefore).toBeTruthy();
+  const secondOldSession = sourceSession(secondBefore!);
+  expect(secondOldSession).toBeTruthy();
+  const secondHandoff = handoffs.arm(secondOldSession!);
+  const secondSource = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname === "/api/debrid/transcode/42/0" &&
+      url.searchParams.get("session") !== secondOldSession &&
+      url.searchParams.get("quality") === "480"
+    );
+  });
+  await page
+    .getByRole("dialog", { name: "Playback settings" })
+    .getByRole("button", { name: "480p Data saver" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await secondHandoff.waitForRelease;
+  secondHandoff.allowRelease();
+  await secondSource;
+  await expect.poll(() => video.getAttribute("src")).not.toBe(secondBefore);
+  const playCallsBeforeRejectedReady = await page.evaluate(
+    () =>
+      (window as Window & { __kheyflixPlayCalls?: number })
+        .__kheyflixPlayCalls || 0,
+  );
+  await page.evaluate(() => {
+    (window as Window & { __kheyflixRejectNextPlay?: boolean })
+      .__kheyflixRejectNextPlay = true;
+  });
+  await video.evaluate((element) => {
+    Object.defineProperty(element, "paused", {
+      configurable: true,
+      get: () => true,
+    });
+    element.dispatchEvent(new Event("canplay", { bubbles: true }));
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __kheyflixPlayCalls?: number })
+            .__kheyflixPlayCalls || 0,
+      ),
+    )
+    .toBeGreaterThan(playCallsBeforeRejectedReady);
+  const playCallsAfterRejectedReady = await page.evaluate(
+    () =>
+      (window as Window & { __kheyflixPlayCalls?: number })
+        .__kheyflixPlayCalls || 0,
+  );
+  await video.evaluate((element) =>
+    element.dispatchEvent(new Event("canplay", { bubbles: true })),
+  );
+  await page.waitForTimeout(150);
+  await expect.poll(() =>
+    page.evaluate(
+      () =>
+        (window as Window & { __kheyflixPlayCalls?: number })
+          .__kheyflixPlayCalls || 0,
+    ),
+  ).toBe(playCallsAfterRejectedReady);
 });
 
 test("seek, audio, and quality changes wait for the active transcoder session to release", async ({

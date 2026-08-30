@@ -14,7 +14,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:ui": "playwright test",
     "test:ui:smoke": "playwright test tests/ui/access-gate.spec.ts tests/ui/catalog-error.spec.ts tests/ui/discovery-request-lifecycle.spec.ts tests/ui/playback-cleanup.spec.ts tests/ui/player-keyboard-focus.spec.ts tests/ui/player-preferences.spec.ts tests/ui/player-recovery.spec.ts tests/ui/provider-failure.spec.ts tests/ui/responsive.spec.ts tests/ui/startup-intro.spec.ts --project=phone --project=tablet --project=laptop",
-    "test:ui:webkit": "playwright test tests/ui/discovery-request-lifecycle.spec.ts tests/ui/player-keyboard-focus.spec.ts --project=webkit",
+    "test:ui:webkit": "playwright test tests/ui/discovery-request-lifecycle.spec.ts tests/ui/player-keyboard-focus.spec.ts --project=webkit && playwright test tests/ui/player-recovery.spec.ts --project=webkit --grep='an iPhone quality handoff resumes after the viewer taps Play during release'",
     "test:playback:production": "PLAYWRIGHT_BASE_URL=https://kheyflix-production.up.railway.app playwright test tests/ui/playback.spec.ts tests/ui/mkv-playback.spec.ts --project=phone --project=laptop",
     "test:ui:update": "playwright test --update-snapshots",
     "deploy:staging": "node scripts/deploy.mjs staging",

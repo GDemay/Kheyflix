@@ -19,7 +19,7 @@ describe("CI workflow concurrency", () => {
 
   it("runs deterministic Chromium and WebKit UI coverage before allowing a change to merge", () => {
     expect(workflow).toMatch(
-      /validate:[\s\S]*?name: Install Chromium and WebKit for UI smoke tests[\s\S]*?npx playwright install --with-deps chromium webkit[\s\S]*?name: UI smoke tests[\s\S]*?npm run test:ui:smoke[\s\S]*?name: WebKit player keyboard smoke test[\s\S]*?npm run test:ui:webkit/,
+      /validate:[\s\S]*?name: Install Chromium and WebKit for UI smoke tests[\s\S]*?npx playwright install --with-deps chromium webkit[\s\S]*?name: UI smoke tests[\s\S]*?npm run test:ui:smoke[\s\S]*?name: WebKit player smoke tests[\s\S]*?npm run test:ui:webkit/,
     );
   });
 
@@ -39,5 +39,8 @@ describe("CI workflow concurrency", () => {
     expect(packageJson).toContain("tests/ui/player-keyboard-focus.spec.ts");
     expect(packageJson).toContain("tests/ui/player-preferences.spec.ts");
     expect(packageJson).toContain('"test:ui:webkit"');
+    expect(packageJson).toContain(
+      "an iPhone quality handoff resumes after the viewer taps Play during release",
+    );
   });
 });
